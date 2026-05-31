@@ -1,0 +1,20 @@
+[package]
+name = "mrg"
+version = "0.1.3"
+edition = "2024"
+
+[dependencies]
+ai_tokenizer_tools = { git = "https://github.com/cyberuser0x33/AITokenizerTools.git" }
+clap = { version = "4.5", features = ["derive"] }
+sha3 = "0.10"
+hex = "0.4"
+ignore = "0.4"
+anyhow = "1.0"
+dialoguer = "0.11"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
