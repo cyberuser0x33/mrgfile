@@ -125,9 +125,9 @@ impl AICounter {
         AnalysisResult {
             words,
             chars,
-            gpt_string: format!("GPT-models: {}", gpt_count),
-            gemini_string: format!("Gemini-models: {}", gemini_count),
-            claude_string: format!("Claude-models: {}", claude_count),
+            gpt_string: format!("GPT-models: ~{}", gpt_count),
+            gemini_string: format!("Gemini-models: ~{}", gemini_count),
+            claude_string: format!("Claude-models: ~{}", claude_count),
         }
     }
 }

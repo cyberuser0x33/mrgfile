@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "mrg"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "ai_tokenizer_tools",
  "anyhow",

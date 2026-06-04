@@ -140,9 +140,9 @@ pub fn run_combine(dir: PathBuf, is_update: bool) -> Result<()> {
             println!("Words: {}, Characters: {}", res.words, res.chars);
             println!("SHA3-256-data: {}", hash_hex);
             println!("\nToken Statistics (there may be some margin of error): ");
-            println!("~ {}", res.gpt_string);
-            println!("~ {}", res.gemini_string);
-            println!("~ {}", res.claude_string);
+            println!("{}", res.gpt_string);
+            println!("{}", res.gemini_string);
+            println!("{}", res.claude_string);
         }
         Err(e) => {
             println!("[!] AI Counter error: {}", e);

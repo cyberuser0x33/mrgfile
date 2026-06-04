@@ -1,6 +1,10 @@
 pub const DEFAULT_IGNORE_CONTENT: &str = r#"# --- SYSTEM AND HIDDEN FILES ---
 .git
 .gitignore
+.github
+.gitattributes
+README.md
+LICENSE.txt
 .mrgignore
 .DS_Store
 Thumbs.db
@@ -117,9 +121,17 @@ yarn-error.log*
 *.temp
 *.stackdump
 mrg-*.txt
+*.md
+*.bat
+*.sh
 
 # --- CONFIGURATIONS THAT MAY BE UNNECESSARY ---
 Cargo.lock
 *.xml
 package-lock.json
+
+# ========== Add custom by user ==========
+
+
+
 "#;
