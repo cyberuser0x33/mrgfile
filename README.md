@@ -1,5 +1,4 @@
-# mrg
-Merging Project Files
+# Merging Project Files
 
 Install with cargo:
 ```bash
