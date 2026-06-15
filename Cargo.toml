@@ -1,6 +1,6 @@
 [package]
 name = "mrg"
-version = "0.1.4"
+version = "0.1.6"
 edition = "2024"
 
 [dependencies]
@@ -12,8 +12,17 @@ ignore = "0.4"
 anyhow = "1.0"
 dialoguer = "0.11"
 chrono = "0.4.45"
-reqwest = { version = "0.13.4", features = ["blocking"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "default-tls"] }
 tokenizers = "0.23.1"
+indicatif = "0.17"
+rayon = "1.10"
+tree-sitter = "0.20"
+tree-sitter-rust = "=0.20.0"
+tree-sitter-python = "0.20"
+tree-sitter-javascript = "0.20"
+tree-sitter-go = "0.20"
+aws-lc-rs = "1.17.0"
+aws-lc-sys = "0.41.0"
 
 [profile.release]
 opt-level = "z"

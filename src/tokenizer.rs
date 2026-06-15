@@ -5,6 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use tokenizers::tokenizer::Tokenizer;
 
+#[allow(dead_code)]
 pub struct AnalysisResult {
     pub words: usize,
     pub chars: usize,
@@ -102,25 +103,50 @@ impl AICounter {
         Ok(t)
     }
 
+    fn count_tokens_chunked(tokenizer: &Tokenizer, text: &str) -> usize {
+        const CHUNK_SIZE: usize = 64 * 1024; // 64 KB
+        let mut total = 0;
+        let mut start = 0;
+        let bytes = text.as_bytes();
+        while start < bytes.len() {
+            let mut end = start + CHUNK_SIZE;
+            if end >= bytes.len() {
+                end = bytes.len();
+            } else {
+                while end > start && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                if end == start {
+                    end = start + CHUNK_SIZE;
+                    while end < bytes.len() && !text.is_char_boundary(end) {
+                        end += 1;
+                    }
+                }
+            }
+            let chunk = &text[start..end];
+            if let Ok(encoding) = tokenizer.encode(chunk, true) {
+                total += encoding.get_ids().len();
+            }
+            start = end;
+        }
+        total
+    }
+
+    pub fn count_tokens_raw(&self, text: &str) -> (usize, usize, usize) {
+        let gpt = Self::count_tokens_chunked(&self.gpt, text);
+        let gemini = Self::count_tokens_chunked(&self.gemini, text);
+        let claude = Self::count_tokens_chunked(&self.claude, text);
+        (gpt, gemini, claude)
+    }
+
+    #[allow(dead_code)]
     pub fn count_string(&self, text: &str) -> AnalysisResult {
         let words = text.split_whitespace().count();
         let chars = text.chars().count();
 
-        let gpt_count = self
-            .gpt
-            .encode(text, true)
-            .map(|e| e.get_ids().len())
-            .unwrap_or(0);
-        let gemini_count = self
-            .gemini
-            .encode(text, true)
-            .map(|e| e.get_ids().len())
-            .unwrap_or(0);
-        let claude_count = self
-            .claude
-            .encode(text, true)
-            .map(|e| e.get_ids().len())
-            .unwrap_or(0);
+        let gpt_count = Self::count_tokens_chunked(&self.gpt, text);
+        let gemini_count = Self::count_tokens_chunked(&self.gemini, text);
+        let claude_count = Self::count_tokens_chunked(&self.claude, text);
 
         AnalysisResult {
             words,

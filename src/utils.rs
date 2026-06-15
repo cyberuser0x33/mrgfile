@@ -4,68 +4,490 @@ use dialoguer::{theme::ColorfulTheme, Select};
 use sha3::{Digest, Sha3_256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tree_sitter::{Node, Parser};
 
-pub fn build_tree(
-    root: &Path,
-    current_dir: &Path,
-    prefix: &str,
-    tree_lines: &mut Vec<String>,
-    files_to_merge: &mut Vec<(PathBuf, String)>,
-    ignore_matcher: &ignore::gitignore::Gitignore,
-    ignored_count: &mut usize,
-) -> Result<()> {
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(current_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        
-        let rel_path = path.strip_prefix(root)?;
-        let is_dir = path.is_dir();
-        
-        if ignore_matcher.matched(&rel_path, is_dir).is_ignore() {
-            *ignored_count += 1;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessingMode {
+    Full,
+    Minify,
+    Maximize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MaximizeFilters {
+    pub directories: Vec<String>,
+    pub files: Vec<String>,
+}
+
+impl MaximizeFilters {
+    pub fn parse(args: &[String]) -> Self {
+        let mut directories = Vec::new();
+        let mut files = Vec::new();
+        for arg in args {
+            let arg_clean = arg.trim_matches('"').trim_matches('\'');
+            if arg_clean.starts_with("d=") {
+                let val = arg_clean["d=".len()..].trim_matches('"').trim_matches('\'');
+                directories.push(val.to_string());
+            } else if arg_clean.starts_with("f=") {
+                let val = arg_clean["f=".len()..].trim_matches('"').trim_matches('\'');
+                files.push(val.to_string());
+            }
+        }
+        Self { directories, files }
+    }
+
+    pub fn matches(&self, rel_path: &str) -> bool {
+        if self.directories.is_empty() && self.files.is_empty() {
+            return true;
+        }
+        let path = Path::new(rel_path);
+        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+            if self.files.iter().any(|f| f == file_name) {
+                return true;
+            }
+        }
+        for component in path.components() {
+            if let Some(comp_str) = component.as_os_str().to_str() {
+                if self.directories.iter().any(|d| d == comp_str) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+pub fn get_skeleton_note(extension: &str) -> &'static str {
+    match extension {
+        "py" | "sh" | "yaml" | "yml" | "toml" | "rb" | "r" => {
+            "# [NOTE: This is a structural skeleton, body removed for brevity]\n"
+        }
+        "html" | "xml" => {
+            "<!-- [NOTE: This is a structural skeleton, body removed for brevity] -->\n"
+        }
+        _ => {
+            "// [NOTE: This is a structural skeleton, body removed for brevity]\n"
+        }
+    }
+}
+
+pub fn minify_content(content: &str, extension: &str) -> String {
+    let mut minified = String::new();
+    let mut in_multiline_comment = false;
+    
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             continue;
         }
         
-        entries.push(entry);
+        let mut line_to_add = line.to_string();
+        
+        match extension {
+            "rs" | "js" | "ts" | "go" | "java" | "cpp" | "c" | "h" | "cs" | "css" => {
+                if in_multiline_comment {
+                    if let Some(pos) = line_to_add.find("*/") {
+                        in_multiline_comment = false;
+                        line_to_add = line_to_add[pos + 2..].to_string();
+                    } else {
+                        continue;
+                    }
+                }
+                
+                while let Some(start_pos) = line_to_add.find("/*") {
+                    if let Some(end_pos) = line_to_add[start_pos..].find("*/") {
+                        let actual_end = start_pos + end_pos + 2;
+                        line_to_add = format!("{}{}", &line_to_add[..start_pos], &line_to_add[actual_end..]);
+                    } else {
+                        line_to_add = line_to_add[..start_pos].to_string();
+                        in_multiline_comment = true;
+                        break;
+                    }
+                }
+                
+                if let Some(pos) = line_to_add.find("//") {
+                    if pos == 0 || (pos > 0 && &line_to_add[pos-1..pos] != ":") {
+                        line_to_add = line_to_add[..pos].to_string();
+                    }
+                }
+            }
+            "py" | "sh" | "yaml" | "yml" | "toml" | "rb" | "r" => {
+                if let Some(pos) = line_to_add.find('#') {
+                    line_to_add = line_to_add[..pos].to_string();
+                }
+            }
+            "html" | "xml" => {
+                if in_multiline_comment {
+                    if let Some(pos) = line_to_add.find("-->") {
+                        in_multiline_comment = false;
+                        line_to_add = line_to_add[pos + 3..].to_string();
+                    } else {
+                        continue;
+                    }
+                }
+                while let Some(start_pos) = line_to_add.find("<!--") {
+                    if let Some(end_pos) = line_to_add[start_pos..].find("-->") {
+                        let actual_end = start_pos + end_pos + 3;
+                        line_to_add = format!("{}{}", &line_to_add[..start_pos], &line_to_add[actual_end..]);
+                    } else {
+                        line_to_add = line_to_add[..start_pos].to_string();
+                        in_multiline_comment = true;
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+        
+        let final_line = line_to_add.trim();
+        if !final_line.is_empty() {
+            // Re-trim end of the line, keeping leading indentation
+            let leading_indent_len = line_to_add.len() - line_to_add.trim_start().len();
+            let indent = &line_to_add[..leading_indent_len];
+            minified.push_str(indent);
+            minified.push_str(final_line);
+            minified.push('\n');
+        }
+    }
+    
+    minified
+}
+
+pub fn maximize_content(content: &str, extension: &str) -> String {
+    let mut skeleton = String::new();
+    skeleton.push_str(get_skeleton_note(extension));
+
+    let lang = match extension {
+        "rs" => Some(tree_sitter_rust::language()),
+        "py" => Some(tree_sitter_python::language()),
+        "js" | "jsx" | "ts" | "tsx" => Some(tree_sitter_javascript::language()),
+        "go" => Some(tree_sitter_go::language()),
+        _ => None,
+    };
+
+    if let Some(l) = lang {
+        let mut parser = Parser::new();
+        if parser.set_language(l).is_ok() {
+            if let Some(tree) = parser.parse(content, None) {
+                let source_bytes = content.as_bytes();
+                let root = tree.root_node();
+                let mut output = String::new();
+                traverse_node(root, source_bytes, extension, 0, &mut output);
+                if !output.trim().is_empty() {
+                    skeleton.push_str(&output);
+                    return skeleton;
+                }
+            }
+        }
     }
 
-    // Sort: dirs first, then alphabetically
-    entries.sort_by(|a, b| {
-        let a_path = a.path();
-        let b_path = b.path();
-        let a_is_dir = a_path.is_dir();
-        let b_is_dir = b_path.is_dir();
+    let fallback = maximize_content_fallback(content, extension);
+    skeleton.push_str(&fallback);
+    skeleton
+}
+
+fn traverse_node<'a>(node: Node<'a>, source: &'a [u8], extension: &str, depth: usize, output: &mut String) {
+    let kind = node.kind();
+    
+    let is_class_container = match extension {
+        "rs" => kind == "impl_item" || kind == "trait_item" || kind == "mod_item",
+        "py" => kind == "class_definition",
+        "js" | "jsx" | "ts" | "tsx" => kind == "class_declaration" || kind == "class" || kind == "interface_declaration",
+        _ => false,
+    };
+    
+    let is_function = match extension {
+        "rs" => kind == "function_item",
+        "py" => kind == "function_definition",
+        "js" | "jsx" | "ts" | "tsx" => kind == "function_declaration" || kind == "method_definition",
+        "go" => kind == "function_declaration" || kind == "method_declaration",
+        _ => false,
+    };
+    
+    let is_standalone_type = match extension {
+        "rs" => kind == "struct_item" || kind == "enum_item",
+        "go" => kind == "type_declaration",
+        _ => false,
+    };
+
+    if is_class_container {
+        let body_kind = match extension {
+            "rs" => "declaration_list",
+            "py" => "block",
+            "js" | "jsx" | "ts" | "tsx" => "class_body",
+            _ => "declaration_list",
+        };
         
-        if a_is_dir != b_is_dir {
-            b_is_dir.cmp(&a_is_dir)
+        let body_child = find_child_by_kind(node, body_kind);
+        if let Some(bc) = body_child {
+            let sig = extract_signature(node, bc, source);
+            output.push_str(&sig);
+            if extension == "py" {
+                output.push_str(":\n");
+            } else {
+                output.push_str(" {\n");
+            }
+            
+            let mut cursor = bc.walk();
+            for child in bc.children(&mut cursor) {
+                traverse_node(child, source, extension, depth + 1, output);
+            }
+            
+            if extension != "py" {
+                let indent = get_indent(node, source);
+                output.push_str(&indent);
+                output.push_str("}\n\n");
+            }
         } else {
-            a.file_name().cmp(&b.file_name())
+            let text = get_node_text(node, source);
+            output.push_str(text);
+            output.push('\n');
         }
-    });
-
-    let count = entries.len();
-    for (i, entry) in entries.iter().enumerate() {
-        let is_last = i == count - 1;
-        let connector = if is_last { "└── " } else { "├── " };
-        let path = entry.path();
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
+    } else if is_function {
+        let body_kind = match extension {
+            "rs" => "block",
+            "py" => "block",
+            "js" | "jsx" | "ts" | "tsx" => "statement_block",
+            "go" => "block",
+            _ => "block",
+        };
         
-        tree_lines.push(format!("{}{}{}", prefix, connector, name_str));
-
-        let rel_path = path.strip_prefix(root)?;
-        let rel_path_str = rel_path.to_string_lossy().replace('\\', "/");
-
-        if path.is_dir() {
-            let next_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-            build_tree(root, &path, &next_prefix, tree_lines, files_to_merge, ignore_matcher, ignored_count)?;
+        let body_child = find_child_by_kind(node, body_kind);
+        if let Some(bc) = body_child {
+            let sig = extract_signature(node, bc, source);
+            output.push_str(&sig);
+            if extension == "py" {
+                output.push_str(" ...\n");
+            } else {
+                output.push_str(" { ... }\n");
+            }
         } else {
-            files_to_merge.push((path, rel_path_str));
+            let text = get_node_text(node, source);
+            output.push_str(text);
+            output.push('\n');
+        }
+    } else if is_standalone_type {
+        let body_kind = match extension {
+            "rs" => "field_declaration_list",
+            "go" => "struct_type",
+            _ => "field_declaration_list",
+        };
+        
+        let mut body_child = find_child_by_kind(node, body_kind);
+        if body_child.is_none() && extension == "rs" {
+            body_child = find_child_by_kind(node, "enum_variant_list");
+        }
+        if body_child.is_none() && extension == "go" {
+            body_child = find_nested_child_by_kinds(node, &["type_spec", "struct_type"]);
+            if body_child.is_none() {
+                body_child = find_nested_child_by_kinds(node, &["type_spec", "interface_type"]);
+            }
+        }
+        
+        if let Some(bc) = body_child {
+            let sig = extract_signature(node, bc, source);
+            output.push_str(&sig);
+            output.push_str(" { ... }\n");
+        } else {
+            let text = get_node_text(node, source);
+            output.push_str(text);
+            output.push('\n');
+        }
+    } else {
+        if node.parent().is_none() || kind == "source_file" || kind == "module" || kind == "translation_unit" {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                traverse_node(child, source, extension, depth, output);
+            }
+        }
+    }
+}
+
+fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == kind {
+            return Some(child);
+        }
+    }
+    None
+}
+
+fn find_nested_child_by_kinds<'a>(node: Node<'a>, kinds: &[&str]) -> Option<Node<'a>> {
+    if kinds.is_empty() {
+        return Some(node);
+    }
+    let target = kinds[0];
+    let rest = &kinds[1..];
+    
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == target {
+            return find_nested_child_by_kinds(child, rest);
+        }
+    }
+    None
+}
+
+fn get_node_text<'a>(node: Node<'a>, source: &'a [u8]) -> &'a str {
+    std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
+}
+
+fn get_indent(node: Node<'_>, source: &[u8]) -> String {
+    let start_byte = node.start_byte();
+    let mut line_start = start_byte;
+    while line_start > 0 && source[line_start - 1] != b'\n' {
+        line_start -= 1;
+    }
+    let indent_bytes = &source[line_start..start_byte];
+    let mut indent = String::new();
+    for &b in indent_bytes {
+        if b == b' ' || b == b'\t' {
+            indent.push(b as char);
+        } else {
+            break;
+        }
+    }
+    indent
+}
+
+fn extract_signature(node: Node<'_>, body_node: Node<'_>, source: &[u8]) -> String {
+    let start_byte = node.start_byte();
+    let mut line_start = start_byte;
+    while line_start > 0 && source[line_start - 1] != b'\n' {
+        line_start -= 1;
+    }
+    let sig_bytes = &source[line_start..body_node.start_byte()];
+    let sig_str = std::str::from_utf8(sig_bytes).unwrap_or("").trim_end();
+    sig_str.to_string()
+}
+
+pub fn maximize_content_fallback(content: &str, extension: &str) -> String {
+    let mut skeleton = String::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let matches = match extension {
+            "py" => {
+                trimmed.starts_with("def ") || trimmed.starts_with("class ")
+            }
+            "rs" => {
+                trimmed.starts_with("fn ") 
+                || trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub(crate) fn ")
+                || trimmed.starts_with("struct ")
+                || trimmed.starts_with("pub struct ")
+                || trimmed.starts_with("enum ")
+                || trimmed.starts_with("pub enum ")
+                || trimmed.starts_with("impl ")
+                || trimmed.starts_with("pub impl ")
+                || trimmed.starts_with("trait ")
+                || trimmed.starts_with("pub trait ")
+            }
+            "js" | "ts" | "jsx" | "tsx" => {
+                trimmed.starts_with("function ")
+                || trimmed.starts_with("export function ")
+                || trimmed.starts_with("class ")
+                || trimmed.starts_with("export class ")
+                || trimmed.starts_with("interface ")
+                || trimmed.starts_with("export interface ")
+                || trimmed.starts_with("type ")
+                || trimmed.starts_with("export type ")
+            }
+            "go" => {
+                trimmed.starts_with("func ")
+                || trimmed.starts_with("type ")
+            }
+            "java" | "cs" | "cpp" | "h" | "hpp" => {
+                trimmed.contains("class ")
+                || trimmed.contains("struct ")
+                || trimmed.contains("interface ")
+                || trimmed.contains("enum ")
+                || (trimmed.contains("void ") || trimmed.contains("int ") || trimmed.contains("string ") || trimmed.contains("bool ") || trimmed.contains("float ") || trimmed.contains("double ")) && trimmed.contains('(')
+            }
+            _ => {
+                trimmed.starts_with("def ")
+                || trimmed.starts_with("class ")
+                || trimmed.starts_with("fn ")
+                || trimmed.starts_with("func ")
+                || trimmed.starts_with("struct ")
+            }
+        };
+        
+        if matches {
+            let indent_len = line.len() - line.trim_start().len();
+            let indent = &line[..indent_len];
+            skeleton.push_str(indent);
+            skeleton.push_str(trimmed);
+            skeleton.push('\n');
+        }
+    }
+    skeleton
+}
+
+#[derive(Debug, Clone)]
+pub struct TreeNode {
+    pub name: String,
+    pub is_dir: bool,
+    pub children: Vec<TreeNode>,
+}
+
+impl TreeNode {
+    pub fn new(name: String, is_dir: bool) -> Self {
+        Self {
+            name,
+            is_dir,
+            children: Vec::new(),
         }
     }
 
-    Ok(())
+    pub fn insert(&mut self, path: &Path, is_dir: bool) {
+        let mut current = self;
+        for component in path.components() {
+            let name = component.as_os_str().to_string_lossy().into_owned();
+            if name.is_empty() || name == "." {
+                continue;
+            }
+            let pos = current.children.iter().position(|c| c.name == name);
+            if let Some(p) = pos {
+                current = &mut current.children[p];
+            } else {
+                let is_last = component == path.components().last().unwrap();
+                let new_node = TreeNode::new(name, if is_last { is_dir } else { true });
+                current.children.push(new_node);
+                let len = current.children.len();
+                current = &mut current.children[len - 1];
+            }
+        }
+    }
+
+    pub fn sort(&mut self) {
+        self.children.sort_by(|a, b| {
+            if a.is_dir != b.is_dir {
+                b.is_dir.cmp(&a.is_dir)
+            } else {
+                a.name.cmp(&b.name)
+            }
+        });
+        for child in &mut self.children {
+            child.sort();
+        }
+    }
+
+    pub fn build_lines(&self, prefix: &str, lines: &mut Vec<String>) {
+        let count = self.children.len();
+        for (i, child) in self.children.iter().enumerate() {
+            let is_last = i == count - 1;
+            let connector = if is_last { "└── " } else { "├── " };
+            lines.push(format!("{}{}{}", prefix, connector, child.name));
+            if child.is_dir {
+                let next_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+                child.build_lines(&next_prefix, lines);
+            }
+        }
+    }
 }
 
 pub fn format_file_size(size: u64) -> String {
@@ -85,7 +507,6 @@ pub fn format_file_size(size: u64) -> String {
 }
 
 pub fn get_current_timestamp() -> String {
-    // DD-Mon-YYYY/HH:MM:SS
     Utc::now().format("%d-%b-%Y/%H:%M:%S").to_string()
 }
 
