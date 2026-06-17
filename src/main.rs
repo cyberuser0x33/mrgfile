@@ -3,7 +3,7 @@ mod config;
 mod tokenizer;
 mod utils;
 
-use crate::commands::{run_combine, run_file, run_init, run_structure, CombineOptions};
+use crate::commands::{CombineOptions, run_combine, run_file, run_init, run_structure};
 use crate::utils::select_directory;
 use anyhow::Result;
 use clap::{Parser, Subcommand};

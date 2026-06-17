@@ -1,11 +1,11 @@
 use crate::config::DEFAULT_IGNORE_CONTENT;
 use crate::tokenizer::AICounter;
 use crate::utils::{
-    calculate_sha3_256, format_file_size, get_current_timestamp, select_mrg_file,
-    maximize_content, minify_content, ProcessingMode, MaximizeFilters, TreeNode,
+    MaximizeFilters, ProcessingMode, TreeNode, calculate_sha3_256, format_file_size,
+    get_current_timestamp, maximize_content, minify_content, select_mrg_file,
 };
 use anyhow::Result;
-use dialoguer::{theme::ColorfulTheme, Confirm, Select};
+use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -55,7 +55,9 @@ struct ProjectVisitorBuilder {
 
 impl<'s> ignore::ParallelVisitorBuilder<'s> for ProjectVisitorBuilder {
     fn build(&mut self) -> Box<dyn ignore::ParallelVisitor> {
-        Box::new(ProjectVisitor { tx: self.tx.clone() })
+        Box::new(ProjectVisitor {
+            tx: self.tx.clone(),
+        })
     }
 }
 
@@ -159,10 +161,16 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     // 1. Parallel Scanning using WalkParallel
     let (tx, rx) = mpsc::channel();
     let mut builder = WalkBuilder::new(&dir);
-    builder.standard_filters(false);
+    builder.standard_filters(true);
     builder.add_custom_ignore_filename(".mrgignore");
+
+    if Path::new(".mrgignore").exists() {
+        if let Some(e) = builder.add_ignore(".mrgignore") {
+            eprintln!("[!] Error loading .mrgignore: {}", e);
+        }
+    }
     let walker = builder.build_parallel();
-    
+
     let mut visitor_builder = ProjectVisitorBuilder { tx };
     walker.visit(&mut visitor_builder);
     drop(visitor_builder); // Close channel on main side
@@ -212,7 +220,10 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         if size > 100 * 1024 && !options.ignore_size {
             let size_str = format_file_size(size);
             let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt(format!("File {} is larger than 100 KB ({}). Include it?", rel_path, size_str))
+                .with_prompt(format!(
+                    "File {} is larger than 100 KB ({}). Include it?",
+                    rel_path, size_str
+                ))
                 .default(false)
                 .interact()?;
             if !confirm {
@@ -238,18 +249,19 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     root_tree.build_lines("", &mut tree_lines);
 
     // Initialize Tokenizer
-    let ai_counter = std::sync::Arc::new(
-        AICounter::new("AItokenizers").map_err(|e| anyhow::anyhow!("{}", e))?
-    );
+    let ai_counter =
+        std::sync::Arc::new(AICounter::new("AItokenizers").map_err(|e| anyhow::anyhow!("{}", e))?);
 
     // 4. Parallel file processing (Rayon)
     println!("[*] Processing and tokenizing files...");
     let pb = ProgressBar::new(final_files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40.green/white}] Merged {pos}/{len} files... {msg}")
+            .template(
+                "[{elapsed_precise}] [{bar:40.green/white}] Merged {pos}/{len} files... {msg}",
+            )
             .unwrap()
-            .progress_chars("▰▰▱")
+            .progress_chars("▰▰▱"),
     );
 
     let processed_files: Vec<FileResult> = final_files
@@ -320,7 +332,10 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
 
     if Path::new(&output_filename).exists() && !options.is_update {
         let confirm = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(format!("File {} already exists. Overwrite?", output_filename))
+            .with_prompt(format!(
+                "File {} already exists. Overwrite?",
+                output_filename
+            ))
             .default(false)
             .interact()?;
 
@@ -403,7 +418,8 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     let mut total_gpt = struct_gpt + header_gpt;
     let mut total_gemini = struct_gemini + header_gemini;
     let mut total_claude = struct_claude + header_claude;
-    let mut total_words = structure_text.split_whitespace().count() + real_header.split_whitespace().count();
+    let mut total_words =
+        structure_text.split_whitespace().count() + real_header.split_whitespace().count();
     let mut total_chars = structure_text.chars().count() + real_header.chars().count();
 
     for file_res in &processed_files {
@@ -415,7 +431,11 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     }
 
     let final_size = fs::metadata(&output_filename)?.len();
-    println!("[+] Created {} ({})", output_filename, format_file_size(final_size));
+    println!(
+        "[+] Created {} ({})",
+        output_filename,
+        format_file_size(final_size)
+    );
     println!("[*] Files merged: {}", processed_files.len());
     println!("[*] Files ignored: {}", total_ignored_count);
 
@@ -449,7 +469,10 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
             true
         } else {
             Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt(format!("Token count ~{} exceeds the limit of {}. Split into parts?", max_tokens, limit))
+                .with_prompt(format!(
+                    "Token count ~{} exceeds the limit of {}. Split into parts?",
+                    max_tokens, limit
+                ))
                 .default(true)
                 .interact()?
         }
@@ -527,7 +550,7 @@ fn write_part(
 ) -> Result<()> {
     let part_filename = format!("mrg-{}-part{}.txt", root_name, part_num);
     let part_path = split_dir_path.join(&part_filename);
-    
+
     let mut body = String::new();
     body.push_str("Project Structure:\n");
     body.push_str(&format!("{}/\n", root_name));
@@ -538,7 +561,7 @@ fn write_part(
     body.push('\n');
     body.push_str(&"=".repeat(30));
     body.push_str("\n\n");
-    
+
     for file_res in part_files {
         body.push_str(&format!("=== start {} ===\n", file_res.rel_path));
         body.push_str(&file_res.content);
@@ -547,17 +570,21 @@ fn write_part(
         }
         body.push_str(&format!("=== end {} ===\n\n", file_res.rel_path));
     }
-    
+
     let hash_hex = calculate_sha3_256(&body);
-    
+
     let mut content = format!(
         "Project merger tool v{}\n{} (part {}) ({})\nhash(sha3-256):{}\n**********\n",
         version, root_name, part_num, timestamp, hash_hex
     );
     content.push_str(&body);
-    
+
     fs::write(&part_path, content)?;
-    println!("[+] Created split part: {} ({})", part_filename, format_file_size(fs::metadata(&part_path)?.len()));
+    println!(
+        "[+] Created split part: {} ({})",
+        part_filename,
+        format_file_size(fs::metadata(&part_path)?.len())
+    );
     Ok(())
 }
 
