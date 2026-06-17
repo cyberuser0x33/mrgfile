@@ -91,6 +91,61 @@ pub fn run_init(project_name: Option<String>) -> Result<()> {
     Ok(())
 }
 
+fn update_gitignore(root_name: &str) -> Result<()> {
+    let gitignore_path = Path::new(".gitignore");
+    if gitignore_path.exists() {
+        let content = fs::read_to_string(gitignore_path)?;
+        let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+
+        let mrgignore_pattern = ".mrgignore".to_string();
+        let txt_pattern = format!("mrg-{}.txt", root_name);
+        let dir_pattern = format!("mrg-{}/", root_name);
+
+        let has_mrgignore = lines.iter().any(|l| l.trim() == mrgignore_pattern);
+        let has_txt = lines.iter().any(|l| l.trim() == txt_pattern);
+        let has_dir = lines.iter().any(|l| l.trim() == dir_pattern);
+
+        let mut modified = false;
+        if !has_mrgignore {
+            lines.push(mrgignore_pattern);
+            modified = true;
+        }
+        if !has_txt {
+            lines.push(txt_pattern);
+            modified = true;
+        }
+        if !has_dir {
+            lines.push(dir_pattern);
+            modified = true;
+        }
+
+        if modified {
+            let mut new_content = lines.join("\n");
+            if !new_content.ends_with('\n') {
+                new_content.push('\n');
+            }
+            fs::write(gitignore_path, new_content)?;
+            println!("[+] Updated .gitignore with ignore patterns.");
+        }
+    }
+    Ok(())
+}
+
+fn format_count(val: usize) -> String {
+    let s = val.to_string();
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut result = String::new();
+    for (i, &b) in bytes.iter().enumerate() {
+        result.push(b as char);
+        let rem = len - 1 - i;
+        if rem > 0 && rem % 3 == 0 {
+            result.push(',');
+        }
+    }
+    result
+}
+
 pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     println!("[*] Scanning directory: {:?}", dir);
 
@@ -106,7 +161,9 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         let confirm = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("The default configuration file for the current version of the program will now be used. Do you want to continue?")
             .default(false)
-            .interact()?;
+            .interact()
+            .map_err(anyhow::Error::from)
+            .or_else(crate::utils::handle_interact_error)?;
 
         if !confirm {
             println!("[*] Operation cancelled by user.");
@@ -120,13 +177,15 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         let patterns = vec![
             "Full (Keep entire code contents)",
             "Minify (Remove comments and extra whitespaces)",
-            "Maximize (Extract only function/class/struct signatures/skeletons using tree-sitter)",
+            "Maximize (Extract only function/class/struct signatures/skeletons)",
         ];
         let selection = Select::with_theme(&ColorfulTheme::default())
             .with_prompt("Choose processing pattern:")
             .items(&patterns)
             .default(0)
-            .interact()?;
+            .interact()
+            .map_err(anyhow::Error::from)
+            .or_else(crate::utils::handle_interact_error)?;
         match selection {
             0 => ProcessingMode::Full,
             1 => ProcessingMode::Minify,
@@ -154,9 +213,20 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     };
 
     let root_name = dir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "project".into());
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_else(|| {
+            dir.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "project".into())
+        });
+
+    if Path::new(".gitignore").exists() {
+        if let Err(e) = update_gitignore(&root_name) {
+            eprintln!("[!] Failed to update .gitignore: {}", e);
+        }
+    }
 
     // 1. Parallel Scanning using WalkParallel
     let (tx, rx) = mpsc::channel();
@@ -225,7 +295,9 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
                     rel_path, size_str
                 ))
                 .default(false)
-                .interact()?;
+                .interact()
+                .map_err(anyhow::Error::from)
+                .or_else(crate::utils::handle_interact_error)?;
             if !confirm {
                 user_ignored_count += 1;
                 continue;
@@ -337,7 +409,9 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
                 output_filename
             ))
             .default(false)
-            .interact()?;
+            .interact()
+            .map_err(anyhow::Error::from)
+            .or_else(crate::utils::handle_interact_error)?;
 
         if !confirm {
             println!("[*] Operation cancelled. Output file not saved.");
@@ -377,8 +451,6 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         write_and_hash("\n")?;
     }
     write_and_hash("\n")?;
-    write_and_hash(&"=".repeat(30))?;
-    write_and_hash("\n\n")?;
 
     for file_res in &processed_files {
         write_and_hash(&format!("=== start {} ===\n", file_res.rel_path))?;
@@ -409,8 +481,6 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         structure_text.push('\n');
     }
     structure_text.push('\n');
-    structure_text.push_str(&"=".repeat(30));
-    structure_text.push_str("\n\n");
 
     let (struct_gpt, struct_gemini, struct_claude) = ai_counter.count_tokens_raw(&structure_text);
     let (header_gpt, header_gemini, header_claude) = ai_counter.count_tokens_raw(&real_header);
@@ -436,15 +506,15 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         output_filename,
         format_file_size(final_size)
     );
-    println!("[*] Files merged: {}", processed_files.len());
-    println!("[*] Files ignored: {}", total_ignored_count);
+    println!("[*] Files merged: {}", format_count(processed_files.len()));
+    println!("[*] Files ignored: {}", format_count(total_ignored_count));
 
-    println!("Words: {}, Characters: {}", total_words, total_chars);
+    println!("Words: {}, Characters: {}", format_count(total_words), format_count(total_chars));
     println!("SHA3-256-data: {}", hash_hex);
     println!("\nToken Statistics (there may be some margin of error): ");
-    println!("GPT-models: ~{}", total_gpt);
-    println!("Gemini-models: ~{}", total_gemini);
-    println!("Claude-models: ~{}", total_claude);
+    println!("GPT-models: ~{}", format_count(total_gpt));
+    println!("Gemini-models: ~{}", format_count(total_gemini));
+    println!("Claude-models: ~{}", format_count(total_claude));
 
     // 7. Auto-splitting logic
     let mut limit = 500_000;
@@ -471,10 +541,12 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
             Confirm::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!(
                     "Token count ~{} exceeds the limit of {}. Split into parts?",
-                    max_tokens, limit
+                    format_count(max_tokens), format_count(limit)
                 ))
                 .default(true)
-                .interact()?
+                .interact()
+                .map_err(anyhow::Error::from)
+                .or_else(crate::utils::handle_interact_error)?
         }
     } else {
         false
@@ -559,8 +631,6 @@ fn write_part(
         body.push('\n');
     }
     body.push('\n');
-    body.push_str(&"=".repeat(30));
-    body.push_str("\n\n");
 
     for file_res in part_files {
         body.push_str(&format!("=== start {} ===\n", file_res.rel_path));

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use dialoguer::{Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use sha3::{Digest, Sha3_256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -567,7 +567,9 @@ pub fn select_directory() -> Result<PathBuf> {
         .with_prompt("Select a project directory:")
         .items(&items)
         .default(0)
-        .interact()?;
+        .interact()
+        .map_err(anyhow::Error::from)
+        .or_else(handle_interact_error)?;
 
     Ok(dirs[selection].clone())
 }
@@ -611,7 +613,24 @@ pub fn select_mrg_file() -> Result<PathBuf> {
         .with_prompt("Select an mrg file:")
         .items(&items)
         .default(0)
-        .interact()?;
+        .interact()
+        .map_err(anyhow::Error::from)
+        .or_else(handle_interact_error)?;
 
     Ok(files[selection].clone())
+}
+
+pub fn handle_interact_error<T>(err: anyhow::Error) -> Result<T> {
+    println!();
+    let exit_confirm = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Finish the process?")
+        .default(true)
+        .interact();
+    match exit_confirm {
+        Ok(true) => {
+            println!("[*] Operation cancelled by user. Exiting cleanly.");
+            std::process::exit(0);
+        }
+        _ => Err(err),
+    }
 }
