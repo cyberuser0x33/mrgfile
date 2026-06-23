@@ -22,7 +22,7 @@
 
 ## 📥 Installation and Update
 
-### 🦀 From Crates.io (Recommended)
+### 🦀 From [Crates.io](https://crates.io/crates/mrgfile) (Recommended)
 
 The easiest way to install the stable version of **mrgfile**:
 
