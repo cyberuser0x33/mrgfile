@@ -1,9 +1,12 @@
 use anyhow::Result;
 use chrono::Utc;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
+use regex::Regex;
 use sha3::{Digest, Sha3_256};
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tree_sitter::{Node, Parser};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +162,10 @@ pub fn minify_content(content: &str, extension: &str) -> String {
     minified
 }
 
+thread_local! {
+    static THREAD_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
+}
+
 pub fn maximize_content(content: &str, extension: &str) -> String {
     let mut skeleton = String::new();
     skeleton.push_str(get_skeleton_note(extension));
@@ -172,18 +179,24 @@ pub fn maximize_content(content: &str, extension: &str) -> String {
     };
 
     if let Some(l) = lang {
-        let mut parser = Parser::new();
-        if parser.set_language(l).is_ok() {
-            if let Some(tree) = parser.parse(content, None) {
-                let source_bytes = content.as_bytes();
-                let root = tree.root_node();
-                let mut output = String::new();
-                traverse_node(root, source_bytes, extension, 0, &mut output);
-                if !output.trim().is_empty() {
-                    skeleton.push_str(&output);
-                    return skeleton;
+        let parsed_output = THREAD_PARSER.with(|parser_cell| {
+            let mut parser = parser_cell.borrow_mut();
+            if parser.set_language(l).is_ok() {
+                if let Some(tree) = parser.parse(content, None) {
+                    let source_bytes = content.as_bytes();
+                    let root = tree.root_node();
+                    let mut output = String::new();
+                    traverse_node(root, source_bytes, extension, 0, &mut output);
+                    if !output.trim().is_empty() {
+                        return Some(output);
+                    }
                 }
             }
+            None
+        });
+        if let Some(output) = parsed_output {
+            skeleton.push_str(&output);
+            return skeleton;
         }
     }
 
@@ -383,61 +396,41 @@ fn extract_signature(node: Node<'_>, body_node: Node<'_>, source: &[u8]) -> Stri
 }
 
 pub fn maximize_content_fallback(content: &str, extension: &str) -> String {
+    static RS_REGEX: OnceLock<Regex> = OnceLock::new();
+    static PY_REGEX: OnceLock<Regex> = OnceLock::new();
+    static JS_TS_REGEX: OnceLock<Regex> = OnceLock::new();
+    static GO_REGEX: OnceLock<Regex> = OnceLock::new();
+    static CPP_CS_JV_REGEX: OnceLock<Regex> = OnceLock::new();
+    static DEFAULT_REGEX: OnceLock<Regex> = OnceLock::new();
+
+    let regex = match extension {
+        "rs" => RS_REGEX.get_or_init(|| {
+            Regex::new(r#"^\s*(pub(\([^)]+\))?\s+)?(async\s+)?(const\s+)?(unsafe\s+)?(extern\s+("[^"]+"\s+)?)?(fn|struct|enum|impl|trait)\b"#).unwrap()
+        }),
+        "py" => PY_REGEX.get_or_init(|| {
+            Regex::new(r#"^\s*(def|class)\b"#).unwrap()
+        }),
+        "js" | "ts" | "jsx" | "tsx" => JS_TS_REGEX.get_or_init(|| {
+            Regex::new(r#"^\s*(export\s+(default\s+)?)?(async\s+)?(function|class|interface|type)\b"#).unwrap()
+        }),
+        "go" => GO_REGEX.get_or_init(|| {
+            Regex::new(r#"^\s*(func|type)\b"#).unwrap()
+        }),
+        "java" | "cs" | "cpp" | "h" | "hpp" => CPP_CS_JV_REGEX.get_or_init(|| {
+            Regex::new(r#"\b(class|struct|interface|enum)\b|(\b(void|int|string|bool|float|double|public|private|protected|static|virtual|override|async)\b.*\()"#).unwrap()
+        }),
+        _ => DEFAULT_REGEX.get_or_init(|| {
+            Regex::new(r#"^\s*(def|class|fn|func|struct)\b"#).unwrap()
+        }),
+    };
+
     let mut skeleton = String::new();
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        let matches = match extension {
-            "py" => trimmed.starts_with("def ") || trimmed.starts_with("class "),
-            "rs" => {
-                trimmed.starts_with("fn ")
-                    || trimmed.starts_with("pub fn ")
-                    || trimmed.starts_with("pub(crate) fn ")
-                    || trimmed.starts_with("struct ")
-                    || trimmed.starts_with("pub struct ")
-                    || trimmed.starts_with("enum ")
-                    || trimmed.starts_with("pub enum ")
-                    || trimmed.starts_with("impl ")
-                    || trimmed.starts_with("pub impl ")
-                    || trimmed.starts_with("trait ")
-                    || trimmed.starts_with("pub trait ")
-            }
-            "js" | "ts" | "jsx" | "tsx" => {
-                trimmed.starts_with("function ")
-                    || trimmed.starts_with("export function ")
-                    || trimmed.starts_with("class ")
-                    || trimmed.starts_with("export class ")
-                    || trimmed.starts_with("interface ")
-                    || trimmed.starts_with("export interface ")
-                    || trimmed.starts_with("type ")
-                    || trimmed.starts_with("export type ")
-            }
-            "go" => trimmed.starts_with("func ") || trimmed.starts_with("type "),
-            "java" | "cs" | "cpp" | "h" | "hpp" => {
-                trimmed.contains("class ")
-                    || trimmed.contains("struct ")
-                    || trimmed.contains("interface ")
-                    || trimmed.contains("enum ")
-                    || (trimmed.contains("void ")
-                        || trimmed.contains("int ")
-                        || trimmed.contains("string ")
-                        || trimmed.contains("bool ")
-                        || trimmed.contains("float ")
-                        || trimmed.contains("double "))
-                        && trimmed.contains('(')
-            }
-            _ => {
-                trimmed.starts_with("def ")
-                    || trimmed.starts_with("class ")
-                    || trimmed.starts_with("fn ")
-                    || trimmed.starts_with("func ")
-                    || trimmed.starts_with("struct ")
-            }
-        };
-
-        if matches {
+        if regex.is_match(trimmed) {
             let indent_len = line.len() - line.trim_start().len();
             let indent = &line[..indent_len];
             skeleton.push_str(indent);
@@ -633,4 +626,17 @@ pub fn handle_interact_error<T>(err: anyhow::Error) -> Result<T> {
         }
         _ => Err(err),
     }
+}
+
+pub fn is_binary_file<P: AsRef<Path>>(path: P) -> Result<bool> {
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+    let mut buffer = [0u8; 8192];
+    let bytes_read = file.read(&mut buffer)?;
+    for &b in &buffer[..bytes_read] {
+        if b == 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

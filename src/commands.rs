@@ -3,15 +3,14 @@ use crate::tokenizer::AICounter;
 use crate::utils::{
     MaximizeFilters, ProcessingMode, TreeNode, calculate_sha3_256, format_file_size,
     get_current_timestamp, maximize_content, minify_content, select_mrg_file,
+    is_binary_file,
 };
 use anyhow::Result;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use sha3::{Digest, Sha3_256};
 use std::fs;
-use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
@@ -91,15 +90,15 @@ pub fn run_init(project_name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn update_gitignore(root_name: &str) -> Result<()> {
+fn update_gitignore(_root_name: &str) -> Result<()> {
     let gitignore_path = Path::new(".gitignore");
     if gitignore_path.exists() {
         let content = fs::read_to_string(gitignore_path)?;
         let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
         let mrgignore_pattern = ".mrgignore".to_string();
-        let txt_pattern = format!("mrg-{}.txt", root_name);
-        let dir_pattern = format!("mrg-{}/", root_name);
+        let txt_pattern = "mrg-*.txt".to_string();
+        let dir_pattern = "mrg-*/".to_string();
 
         let has_mrgignore = lines.iter().any(|l| l.trim() == mrgignore_pattern);
         let has_txt = lines.iter().any(|l| l.trim() == txt_pattern);
@@ -267,21 +266,6 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         }
     }
 
-    // Determine ignored count
-    let mut total_files_count = 0;
-    for entry in WalkBuilder::new(&dir).standard_filters(false).build() {
-        if let Ok(e) = entry {
-            if e.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                total_files_count += 1;
-            }
-        }
-    }
-    let raw_ignored_count = if total_files_count > files.len() {
-        total_files_count - files.len()
-    } else {
-        0
-    };
-
     // 2. Filter out large files
     let mut final_files = Vec::new();
     let mut user_ignored_count = 0;
@@ -306,7 +290,7 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         final_files.push((path, rel_path));
     }
 
-    let total_ignored_count = raw_ignored_count + user_ignored_count;
+    let total_ignored_count = user_ignored_count;
 
     // 3. Reconstruct tree structure
     let mut root_tree = TreeNode::new(root_name.clone(), true);
@@ -320,9 +304,9 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     let mut tree_lines = Vec::new();
     root_tree.build_lines("", &mut tree_lines);
 
-    // Initialize Tokenizer
+    // Initialize Tokenizer (load_all = false)
     let ai_counter =
-        std::sync::Arc::new(AICounter::new("AItokenizers").map_err(|e| anyhow::anyhow!("{}", e))?);
+        std::sync::Arc::new(AICounter::new("AItokenizers", false).map_err(|e| anyhow::anyhow!("{}", e))?);
 
     // 4. Parallel file processing (Rayon)
     println!("[*] Processing and tokenizing files...");
@@ -339,8 +323,6 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     let processed_files: Vec<FileResult> = final_files
         .par_iter()
         .map(|(path, rel_path)| {
-            pb.set_message(rel_path.clone());
-
             let mut file_content = match fs::read_to_string(path) {
                 Ok(c) => c,
                 Err(_) => "non supported data, skipped\n".to_string(),
@@ -419,58 +401,34 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         }
     }
 
-    // 5. Streaming Write and Incremental Hashing (Seek method)
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&output_filename)?;
-
-    let dummy_hash = "0".repeat(64);
-    let dummy_header = format!(
-        "Project merger tool v{}\n{} ({})\nhash(sha3-256):{}\n**********\n",
-        version, root_name, timestamp, dummy_hash
-    );
-    file.write_all(dummy_header.as_bytes())?;
-
-    let mut writer = BufWriter::new(file);
-    let mut hasher = Sha3_256::new();
-
-    let mut write_and_hash = |data: &str| -> Result<()> {
-        let bytes = data.as_bytes();
-        writer.write_all(bytes)?;
-        hasher.update(bytes);
-        Ok(())
-    };
-
-    write_and_hash("Project Structure:\n")?;
-    write_and_hash(&format!("{}/\n", root_name))?;
+    // 5. Memory-buffered Write and Incremental Hashing (No Seek)
+    let mut body = String::new();
+    body.push_str("Project Structure:\n");
+    body.push_str(&format!("{}/\n", root_name));
     for line in &tree_lines {
-        write_and_hash(line)?;
-        write_and_hash("\n")?;
+        body.push_str(line);
+        body.push('\n');
     }
-    write_and_hash("\n")?;
+    body.push('\n');
 
     for file_res in &processed_files {
-        write_and_hash(&format!("=== start {} ===\n", file_res.rel_path))?;
-        write_and_hash(&file_res.content)?;
+        body.push_str(&format!("=== start {} ===\n", file_res.rel_path));
+        body.push_str(&file_res.content);
         if !file_res.content.ends_with('\n') {
-            write_and_hash("\n")?;
+            body.push('\n');
         }
-        write_and_hash(&format!("=== end {} ===\n\n", file_res.rel_path))?;
+        body.push_str(&format!("=== end {} ===\n\n", file_res.rel_path));
     }
 
-    writer.flush()?;
-    let mut file = writer.into_inner()?;
-    let hash_hex = hex::encode(hasher.finalize());
-
-    file.seek(SeekFrom::Start(0))?;
+    let hash_hex = calculate_sha3_256(&body);
     let real_header = format!(
         "Project merger tool v{}\n{} ({})\nhash(sha3-256):{}\n**********\n",
         version, root_name, timestamp, hash_hex
     );
-    file.write_all(real_header.as_bytes())?;
+
+    let mut final_content = real_header.clone();
+    final_content.push_str(&body);
+    fs::write(&output_filename, final_content)?;
 
     // 6. Token statistics summing
     let mut structure_text = String::new();
@@ -512,9 +470,9 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     println!("Words: {}, Characters: {}", format_count(total_words), format_count(total_chars));
     println!("SHA3-256-data: {}", hash_hex);
     println!("\nToken Statistics (there may be some margin of error): ");
-    println!("GPT-models: ~{}", format_count(total_gpt));
-    println!("Gemini-models: ~{}", format_count(total_gemini));
-    println!("Claude-models: ~{}", format_count(total_claude));
+    println!("GPT4-Turbo-O1-O3-Mini: ~{}", format_count(total_gpt));
+    println!("Gemini-Gemma7B: ~{}", format_count(total_gemini));
+    println!("Claude3.5-Sonnet-Opus: ~{}", format_count(total_claude));
 
     // 7. Auto-splitting logic
     let mut limit = 500_000;
@@ -689,5 +647,50 @@ pub fn run_file() -> Result<()> {
     } else {
         println!("{}", content);
     }
+    Ok(())
+}
+
+pub fn run_tokenize(file_path: Option<PathBuf>) -> Result<()> {
+    let target_path = match file_path {
+        Some(path) => path,
+        None => select_mrg_file()?,
+    };
+
+    if !target_path.exists() {
+        anyhow::bail!("Error: File {:?} does not exist.", target_path);
+    }
+
+    if is_binary_file(&target_path)? {
+        anyhow::bail!("Error: Cannot tokenize binary file.");
+    }
+
+    let file_content = fs::read_to_string(&target_path)?;
+    println!("[*] Tokenizing file: {:?}", target_path);
+
+    // Initialize all 10 tokenizers
+    let ai_counter = AICounter::new("AItokenizers", true).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let counts = ai_counter.count_tokens_all(&file_content);
+
+    println!("\nToken Statistics for all models:");
+    
+    let display_order = [
+        (crate::tokenizer::ModelKind::Gpt4oO1O3Mini, "GPT4-Turbo-O1-O3-Mini:"),
+        (crate::tokenizer::ModelKind::Gpt4TurboGpt35Turbo, "GPT4-Turbo-GPT3.5-Turbo:"),
+        (crate::tokenizer::ModelKind::GeminiGemma7b, "Gemini-Gemma7B:"),
+        (crate::tokenizer::ModelKind::Claude35SonnetOpus, "Claude3.5-Sonnet-Opus:"),
+        (crate::tokenizer::ModelKind::Llama32, "LLAMA3-3.1-3.2:"),
+        (crate::tokenizer::ModelKind::DeepSeekV2V3R1, "DeepSeekV2-V3-R1:"),
+        (crate::tokenizer::ModelKind::Qwen25Coder, "Qwen2.5-Coder:"),
+        (crate::tokenizer::ModelKind::MistralCodestral, "Mistral-Codestral:"),
+        (crate::tokenizer::ModelKind::Phi3Phi4, "Phi3-Phi4:"),
+        (crate::tokenizer::ModelKind::CohereCommandRPlus, "Cohere-CommandR-R+:"),
+    ];
+
+    for &(kind, label) in &display_order {
+        let count = counts.get(&kind).copied().unwrap_or(0);
+        println!("{} ~{}", label, format_count(count));
+    }
+
     Ok(())
 }

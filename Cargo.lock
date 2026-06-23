@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "mrg"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ai_tokenizer_tools",
  "anyhow",
@@ -1399,6 +1399,7 @@ dependencies = [
  "ignore",
  "indicatif 0.17.11",
  "rayon",
+ "regex",
  "reqwest 0.13.4",
  "sha3",
  "tokenizers 0.23.1",

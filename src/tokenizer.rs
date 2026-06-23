@@ -5,6 +5,90 @@ use std::fs;
 use std::path::PathBuf;
 use tokenizers::tokenizer::Tokenizer;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModelKind {
+    Gpt4oO1O3Mini,
+    Gpt4TurboGpt35Turbo,
+    GeminiGemma7b,
+    Claude35SonnetOpus,
+    Llama32,
+    DeepSeekV2V3R1,
+    Qwen25Coder,
+    MistralCodestral,
+    Phi3Phi4,
+    CohereCommandRPlus,
+}
+
+pub struct ModelInfo {
+    pub kind: ModelKind,
+    pub display_name: &'static str,
+    pub remote_url: &'static str,
+    pub filename: &'static str,
+}
+
+pub const SUPPORTED_MODELS: &[ModelInfo] = &[
+    ModelInfo {
+        kind: ModelKind::Gpt4oO1O3Mini,
+        display_name: "GPT4-Turbo-O1-O3-Mini",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/gpt4o_o1_o3mini.json",
+        filename: "gpt4o_o1_o3mini.json",
+    },
+    ModelInfo {
+        kind: ModelKind::Gpt4TurboGpt35Turbo,
+        display_name: "GPT4-Turbo-GPT3.5-Turbo",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/gpt4_turbo_gpt3.5_turbo.json",
+        filename: "gpt4_turbo_gpt3.5_turbo.json",
+    },
+    ModelInfo {
+        kind: ModelKind::GeminiGemma7b,
+        display_name: "Gemini-Gemma7B",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/gemini_gemma7b.json",
+        filename: "gemini_gemma7b.json",
+    },
+    ModelInfo {
+        kind: ModelKind::Claude35SonnetOpus,
+        display_name: "Claude3.5-Sonnet-Opus",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/claude3_3.5_sonnet_opus.json",
+        filename: "claude3_3.5_sonnet_opus.json",
+    },
+    ModelInfo {
+        kind: ModelKind::Llama32,
+        display_name: "LLAMA3-3.1-3.2",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/llama3.2.json",
+        filename: "llama3.2.json",
+    },
+    ModelInfo {
+        kind: ModelKind::DeepSeekV2V3R1,
+        display_name: "DeepSeekV2-V3-R1",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/deepseek_v2_v3_r1.json",
+        filename: "deepseek_v2_v3_r1.json",
+    },
+    ModelInfo {
+        kind: ModelKind::Qwen25Coder,
+        display_name: "Qwen2.5-Coder",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/qwen2.5_coder.json",
+        filename: "qwen2.5_coder.json",
+    },
+    ModelInfo {
+        kind: ModelKind::MistralCodestral,
+        display_name: "Mistral-Codestral",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/mistral_codestral.json",
+        filename: "mistral_codestral.json",
+    },
+    ModelInfo {
+        kind: ModelKind::Phi3Phi4,
+        display_name: "Phi3-Phi4",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/phi3_phi4.json",
+        filename: "phi3_phi4.json",
+    },
+    ModelInfo {
+        kind: ModelKind::CohereCommandRPlus,
+        display_name: "Cohere-CommandR-R+",
+        remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/cohere_command_r_r%2B.json",
+        filename: "cohere_command_r_r_plus.json",
+    },
+];
+
 #[allow(dead_code)]
 pub struct AnalysisResult {
     pub words: usize,
@@ -15,13 +99,11 @@ pub struct AnalysisResult {
 }
 
 pub struct AICounter {
-    gpt: Tokenizer,
-    gemini: Tokenizer,
-    claude: Tokenizer,
+    tokenizers: std::collections::HashMap<ModelKind, Tokenizer>,
 }
 
 impl AICounter {
-    pub fn new(folder_name: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn new(folder_name: &str, load_all: bool) -> Result<Self, Box<dyn Error>> {
         let exe_path = std::env::current_exe()?;
         let exe_dir = exe_path.parent().ok_or("Root dir not found")?;
         let tokenizers_dir = exe_dir.join(folder_name);
@@ -30,81 +112,71 @@ impl AICounter {
             fs::create_dir_all(&tokenizers_dir)?;
         }
 
-        let gpt = Self::load_or_download(
-            "GPT-4o",
-            "https://raw.githubusercontent.com/cyberuser0x33/mrgfilesAiTokenizers/main/tokenizers/gpt.json",
-            &tokenizers_dir.join("gpt.json"),
-        )?;
+        // First, download any files that do not exist (always download all 10)
+        for model in SUPPORTED_MODELS {
+            let path = tokenizers_dir.join(model.filename);
+            if !path.exists() {
+                Self::download_tokenizer(model.display_name, model.remote_url, &path)?;
+            }
+        }
 
-        let gemini = Self::load_or_download(
-            "Gemini",
-            "https://raw.githubusercontent.com/cyberuser0x33/mrgfilesAiTokenizers/main/tokenizers/gemini.json",
-            &tokenizers_dir.join("gemini.json"),
-        )?;
+        let mut tokenizers = std::collections::HashMap::new();
+        // Load the ones we need
+        for model in SUPPORTED_MODELS {
+            let path = tokenizers_dir.join(model.filename);
+            let should_load = if load_all {
+                true
+            } else {
+                model.kind == ModelKind::Gpt4oO1O3Mini
+                    || model.kind == ModelKind::GeminiGemma7b
+                    || model.kind == ModelKind::Claude35SonnetOpus
+            };
 
-        let claude = Self::load_or_download(
-            "Claude",
-            "https://raw.githubusercontent.com/cyberuser0x33/mrgfilesAiTokenizers/main/tokenizers/claude.json",
-            &tokenizers_dir.join("claude.json"),
-        )?;
+            if should_load {
+                let t = Tokenizer::from_file(&path).map_err(|e| {
+                    let _ = fs::remove_file(&path);
+                    format!(
+                        "Dictionary error {}: {}. File was deleted, please try again.",
+                        model.display_name, e
+                    )
+                })?;
+                tokenizers.insert(model.kind, t);
+            }
+        }
 
-        Ok(Self {
-            gpt,
-            gemini,
-            claude,
-        })
+        Ok(Self { tokenizers })
     }
 
-    fn load_or_download(
+    fn download_tokenizer(
         name: &str,
         url: &str,
         path: &PathBuf,
-    ) -> Result<Tokenizer, Box<dyn Error>> {
-        if !path.exists() {
-            println!("[*] Downloading tokenizer for {}...", name);
+    ) -> Result<(), Box<dyn Error>> {
+        println!("[*] Downloading tokenizer for {}...", name);
 
-            let client = Client::builder().build()?;
-            let response = client
-                .get(url)
-                .header(USER_AGENT, "rust-tokenizer-app/1.0")
-                .send()?;
+        let client = Client::builder().build()?;
+        let response = client
+            .get(url)
+            .header(USER_AGENT, "rust-tokenizer-app/1.0")
+            .send()?;
 
-            let status = response.status();
+        let status = response.status();
 
-            if !status.is_success() {
-                let err_text = response.text().unwrap_or_else(|_| "Unknown error".into());
-                return Err(
-                    format!("Server error {}: {}. Response: {}", name, status, err_text).into(),
-                );
-            }
-
-            let bytes = response.bytes()?;
-            fs::write(path, bytes)?;
-            println!("[+] Successfully downloaded {}", name);
+        if !status.is_success() {
+            let err_text = response.text().unwrap_or_else(|_| "Unknown error".into());
+            return Err(
+                format!("Server error {}: {}. Response: {}", name, status, err_text).into(),
+            );
         }
 
-        let t = Tokenizer::from_file(path).map_err(|e| {
-            if let Ok(content) = fs::read_to_string(path) {
-                println!("--- DEBUG INFO ---");
-                println!(
-                    "File {} content starts with: {}",
-                    name,
-                    content.chars().take(100).collect::<String>()
-                );
-                println!("------------------");
-            }
-            let _ = fs::remove_file(path);
-            format!(
-                "Dictionary error {}: {}. File was deleted, please try again.",
-                name, e
-            )
-        })?;
-
-        Ok(t)
+        let bytes = response.bytes()?;
+        fs::write(path, bytes)?;
+        println!("[+] Successfully downloaded {}", name);
+        Ok(())
     }
 
     fn count_tokens_chunked(tokenizer: &Tokenizer, text: &str) -> usize {
-        const CHUNK_SIZE: usize = 64 * 1024; // 64 KB
+        const CHUNK_SIZE: usize = 1024 * 1024; // 1 MB
         let mut total = 0;
         let mut start = 0;
         let bytes = text.as_bytes();
@@ -133,10 +205,24 @@ impl AICounter {
     }
 
     pub fn count_tokens_raw(&self, text: &str) -> (usize, usize, usize) {
-        let gpt = Self::count_tokens_chunked(&self.gpt, text);
-        let gemini = Self::count_tokens_chunked(&self.gemini, text);
-        let claude = Self::count_tokens_chunked(&self.claude, text);
+        let gpt = self.tokenizers.get(&ModelKind::Gpt4oO1O3Mini)
+            .map(|t| Self::count_tokens_chunked(t, text))
+            .unwrap_or(0);
+        let gemini = self.tokenizers.get(&ModelKind::GeminiGemma7b)
+            .map(|t| Self::count_tokens_chunked(t, text))
+            .unwrap_or(0);
+        let claude = self.tokenizers.get(&ModelKind::Claude35SonnetOpus)
+            .map(|t| Self::count_tokens_chunked(t, text))
+            .unwrap_or(0);
         (gpt, gemini, claude)
+    }
+
+    pub fn count_tokens_all(&self, text: &str) -> std::collections::HashMap<ModelKind, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for (kind, tokenizer) in &self.tokenizers {
+            counts.insert(*kind, Self::count_tokens_chunked(tokenizer, text));
+        }
+        counts
     }
 
     #[allow(dead_code)]
@@ -144,18 +230,22 @@ impl AICounter {
         let words = text.split_whitespace().count();
         let chars = text.chars().count();
 
-        let gpt_count = Self::count_tokens_chunked(&self.gpt, text);
-        let gemini_count = Self::count_tokens_chunked(&self.gemini, text);
-        let claude_count = Self::count_tokens_chunked(&self.claude, text);
+        let gpt_count = self.tokenizers.get(&ModelKind::Gpt4oO1O3Mini)
+            .map(|t| Self::count_tokens_chunked(t, text))
+            .unwrap_or(0);
+        let gemini_count = self.tokenizers.get(&ModelKind::GeminiGemma7b)
+            .map(|t| Self::count_tokens_chunked(t, text))
+            .unwrap_or(0);
+        let claude_count = self.tokenizers.get(&ModelKind::Claude35SonnetOpus)
+            .map(|t| Self::count_tokens_chunked(t, text))
+            .unwrap_or(0);
 
         AnalysisResult {
             words,
             chars,
-            gpt_string: format!("GPT-models: ~{}", gpt_count),
-            gemini_string: format!("Gemini-models: ~{}", gemini_count),
-            claude_string: format!("Claude-models: ~{}", claude_count),
+            gpt_string: format!("GPT4-Turbo-O1-O3-Mini: ~{}", gpt_count),
+            gemini_string: format!("Gemini-Gemma7B: ~{}", gemini_count),
+            claude_string: format!("Claude3.5-Sonnet-Opus: ~{}", claude_count),
         }
     }
 }
-
-

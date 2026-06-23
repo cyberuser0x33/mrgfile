@@ -3,7 +3,7 @@ mod config;
 mod tokenizer;
 mod utils;
 
-use crate::commands::{CombineOptions, run_combine, run_file, run_init, run_structure};
+use crate::commands::{CombineOptions, run_combine, run_file, run_init, run_structure, run_tokenize};
 use crate::utils::select_directory;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -31,6 +31,10 @@ struct Cli {
     /// Update an existing merge file (shortcut for update subcommand)
     #[arg(short = 'u', long = "update", value_name = "DIR")]
     update: Option<Option<PathBuf>>,
+
+    /// Tokenize a file using all available tokenizers
+    #[arg(short = 't', long = "tokenize", value_name = "FILE", num_args(0..=1))]
+    tokenize: Option<Option<PathBuf>>,
 
     /// Split option: if token limit is exceeded, split into parts. Value for limit (e.g. 350K, 1.2M, default 500K)
     #[arg(long = "split", value_name = "LIMIT", global = true)]
@@ -102,6 +106,14 @@ fn main() -> Result<()> {
     };
 
     // Handle shortcuts
+    if let Some(tokenize_opt) = cli.tokenize {
+        let file_path = match tokenize_opt {
+            Some(path) => Some(path),
+            None => None,
+        };
+        return run_tokenize(file_path);
+    }
+
     if let Some(dir_opt) = cli.combine {
         let dir = match dir_opt {
             Some(d) => d,

@@ -1,6 +1,6 @@
 [package]
 name = "mrg"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 
 [dependencies]
@@ -23,9 +23,10 @@ tree-sitter-javascript = "0.20"
 tree-sitter-go = "0.20"
 aws-lc-rs = "1.17.0"
 aws-lc-sys = "0.41.0"
+regex = "1.10"
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"

@@ -2,3 +2,7 @@
 .mrgignore
 mrg-mrgfiles.txt
 mrg-mrgfiles/
+mrg-*.txt
+mrg-*/
+optimization.txt
+Cargo.lock
