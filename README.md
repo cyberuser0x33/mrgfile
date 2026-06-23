@@ -20,15 +20,28 @@
 
 ---
 
-## 📥 Installation and Update
+##📥 Installation and Update
+###🦀 From Crates.io (Recommended)
+####The easiest way to install the stable version of mrgfile:
+```bash
+cargo install mrgfile
+```
 
-### ✅ Install with cargo:
+###📂 From GitHub (Development version)
+####If you want to install the latest version directly from the repository:
 ```bash
 cargo install --git https://github.com/cyberuser0x33/mrgfile.git
 ```
 
-### 🔄 Update:
+###🔄 How to Update
+####To update to the latest version, simply run the installation command again.
+####For the GitHub version, add the --force flag:
+
 ```bash
+# Update from crates.io
+cargo install mrgfile
+
+# Update from GitHub
 cargo install --git https://github.com/cyberuser0x33/mrgfile.git --force
 ```
 
