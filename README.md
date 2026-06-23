@@ -38,9 +38,10 @@ If you want to install the latest version directly from the repository:
 cargo install --git https://github.com/cyberuser0x33/mrgfile.git
 ```
 
-###🔄 How to Update
+### 🔄 How to Update
 
 To update to the latest version, simply run the installation command again.
+
 For the GitHub version, add the --force flag:
 
 ```bash
