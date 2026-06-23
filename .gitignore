@@ -6,3 +6,4 @@ mrg-*.txt
 mrg-*/
 optimization.txt
 Cargo.lock
+token-statistics.xlsx

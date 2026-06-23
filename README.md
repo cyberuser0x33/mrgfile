@@ -149,10 +149,18 @@ Words: 240, Characters: 1,520
 SHA3-256-data: 8a6f3b794d...
 
 Token Statistics (there may be some margin of error): 
-GPT-models: ~350
-Gemini-models: ~310
-Claude-models: ~340
+GPT4-Turbo-O1-O3-Mini: ~350
+Gemini-Gemma7B: ~310
+Claude3.5-Sonnet-Opus: ~340
 ```
+
+---
+
+## 📈 Tokenization Comparison
+
+Below is a diagram comparing tokenization statistics across the different supported models:
+
+![Tokenization Comparison Diagram](diagram.png)
 
 ---
 
@@ -160,3 +168,4 @@ Claude-models: ~340
 
 Distributed under the [GNU Affero General Public License v3](https://www.gnu.org/licenses/agpl-3.0.html)<br>
 See LICENSE.txt file for more details.
+
