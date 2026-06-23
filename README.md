@@ -1,6 +1,6 @@
-# mrg — Project Files Merger for AI Analysis 📄🚀
+# mrgfile — Project Files Merger for AI Analysis 📄🚀
 
-**mrg** is a fast and convenient Rust-powered CLI utility designed to combine project files into a single structured text document. The output is optimized for ingestion by Large Language Models (LLMs) like GPT, Gemini, and Claude for code analysis, refactoring, or bug hunting.
+**mrgfile** is a fast and convenient Rust-powered CLI utility designed to combine project files into a single structured text document. The output is optimized for ingestion by Large Language Models (LLMs) like GPT, Gemini, and Claude for code analysis, refactoring, or bug hunting.
 
 ---
 
@@ -24,12 +24,12 @@
 
 ### ✅ Install with cargo:
 ```bash
-cargo install --git https://github.com/cyberuser0x33/mrg.git
+cargo install --git https://github.com/cyberuser0x33/mrgfile.git
 ```
 
 ### 🔄 Update:
 ```bash
-cargo install --git https://github.com/cyberuser0x33/mrg.git --force
+cargo install --git https://github.com/cyberuser0x33/mrgfile.git --force
 ```
 
 ---
@@ -168,4 +168,3 @@ Below is a diagram comparing tokenization statistics across the different suppor
 
 Distributed under the [GNU Affero General Public License v3](https://www.gnu.org/licenses/agpl-3.0.html)<br>
 See LICENSE.txt file for more details.
-

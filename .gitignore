@@ -7,3 +7,4 @@ mrg-*/
 optimization.txt
 Cargo.lock
 token-statistics.xlsx
+test_project/

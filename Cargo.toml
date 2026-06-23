@@ -1,10 +1,17 @@
 [package]
-name = "mrg"
+name = "mrgfile"
 version = "0.1.8"
 edition = "2024"
+authors = ["cyberuser0x33 <cyberuser0x33@protonmail.com>"]
+description = "A fast CLI tool to merge project files into a single structured document optimized for LLM context (AI analysis)."
+license = "AGPL-3.0-only"
+repository = "https://github.com/cyberuser0x33/mrgfile"
+readme = "README.md"
+keywords = ["llm", "ai-context", "merger", "cli", "devtools"]
+categories = ["command-line-utilities"]
+
 
 [dependencies]
-ai_tokenizer_tools = { git = "https://github.com/cyberuser0x33/AITokenizerTools.git" }
 clap = { version = "4.5", features = ["derive"] }
 sha3 = "0.10"
 hex = "0.4"
@@ -31,3 +38,8 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+
+[[bin]]
+name = "mrg"
+path = "src/main.rs"
