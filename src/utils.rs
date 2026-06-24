@@ -683,3 +683,11 @@ pub fn is_binary_file<P: AsRef<Path>>(path: P) -> Result<bool> {
     }
     Ok(false)
 }
+
+pub fn clean_path_for_display(path: &Path) -> String {
+    let mut s = path.to_string_lossy().into_owned();
+    if s.starts_with(".\\") || s.starts_with("./") {
+        s = s[2..].to_string();
+    }
+    s.replace('\\', "/")
+}

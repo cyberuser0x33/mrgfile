@@ -3,7 +3,7 @@ use crate::tokenizer::AICounter;
 use crate::utils::{
     MaximizeFilters, ProcessingMode, TreeNode, format_file_size,
     get_current_timestamp, maximize_content, minify_content, select_mrg_file,
-    is_binary_file,
+    is_binary_file, clean_path_for_display,
 };
 use anyhow::Result;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
@@ -517,7 +517,7 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         let split_dir_path = parent_dir.join(&split_dir_name);
         fs::create_dir_all(&split_dir_path)?;
 
-        println!("[*] Splitting project into parts in {:?}", split_dir_path);
+        println!("[*] Splitting project into parts in {}", clean_path_for_display(&split_dir_path));
 
         let mut part_num = 1;
         let mut part_files = Vec::new();
@@ -715,7 +715,7 @@ pub fn run_tokenize(file_path: Option<PathBuf>) -> Result<()> {
     };
 
     if !target_path.exists() {
-        anyhow::bail!("Error: File {:?} does not exist.", target_path);
+        anyhow::bail!("Error: File {} does not exist.", clean_path_for_display(&target_path));
     }
 
     if is_binary_file(&target_path)? {
@@ -723,7 +723,7 @@ pub fn run_tokenize(file_path: Option<PathBuf>) -> Result<()> {
     }
 
     let file_content = fs::read_to_string(&target_path)?;
-    println!("[*] Tokenizing file: {:?}", target_path);
+    println!("[*] Tokenizing file: {}", clean_path_for_display(&target_path));
 
     // Initialize all 10 tokenizers
     let ai_counter = AICounter::new("AItokenizers", true).map_err(|e| anyhow::anyhow!("{}", e))?;
