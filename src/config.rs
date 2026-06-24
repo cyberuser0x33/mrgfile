@@ -1,61 +1,74 @@
-pub const DEFAULT_IGNORE_CONTENT: &str = r#"# --- SYSTEM AND HIDDEN FILES ---
-.git
+pub const DEFAULT_IGNORE_CONTENT: &str = r#"# === SYSTEM AND HIDDEN FILES ===
+.git/
 .gitignore
-.github
+.github/
 .gitattributes
-README.md
-LICENSE.txt
 .mrgignore
 .DS_Store
 Thumbs.db
 desktop.ini
+.Trashes
+.fseventsd
 
-# --- CONFIDENTIAL INFORMATION (Secrets) ---
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# === CONFIDENTIAL INFORMATION (Secrets) ===
+.env*
 *.pem
 *.key
 *.pub
-id_rsa
-id_ed25519
-secrets.yaml
-auth.json
-credentials.json
+*.crt
 *.pfx
 *.p12
+id_rsa
+id_ed25519
+secrets.*
+auth.json
+credentials.json
+*.keystore
+service-account.json
 
-# --- DEPENDENCY AND BUILD FOLDERS (Heavy/Build) ---
-node_modules
-bower_components
-jspm_packages
-venv
-.venv
-env
-__pycache__
-target
-build
-dist
-out
-release_files
-Debug
-Release
-.gradle
-ipch
-.terraform
+# === DEPENDENCY AND BUILD FOLDERS ===
+node_modules/
+bower_components/
+jspm_packages/
+venv/
+.venv/
+env/
+__pycache__/
+target/
+build/
+dist/
+out/
+.next/
+.nuxt/
+.turbo/
+.cache/
+bin/
+obj/
+release/
 
-# --- IDE and Development Tools ---
-.idea
-.vscode
+# === IDE AND DEV TOOLS ===
+.idea/
+.vscode/
 *.swp
 *.swo
 .eslintcache
 .sass-cache
-.cache
+.parcel-cache
+.terraform/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
 
-# --- BINARY FILES AND COMPILATION ---
+# === MOBILE AND SPECIFIC ECOSYSTEMS ===
+ios/Pods/
+android/.gradle/
+.expo/
+fastlane/
+.flutter-plugins
+.pub-cache/
+
+# === BINARY AND LARGE FILES ===
 *.pyc
 *.pyo
 *.pyd
@@ -68,34 +81,19 @@ ipch
 *.jar
 *.exe
 *.bin
-*.exp
-*.lib
-*.def
 *.out
-core
+*.app
+*.ipa
+*.apk
 
-# --- ARCHIVES AND COMPRESSED DATA ---
+# === ARCHIVES AND MEDIA ===
 *.zip
-*.tar
+*.tar*
 *.gz
 *.7z
 *.rar
 *.dmg
 *.iso
-*.apk
-*.ipa
-
-# --- DATABASES AND DATA (Non-text) ---
-*.db
-*.sqlite
-*.sqlite3
-*.pickle
-*.pkl
-*.h5
-*.npy
-*.parquet
-
-# --- MEDIA AND DOCUMENTS (Binary) ---
 *.png
 *.jpg
 *.jpeg
@@ -103,15 +101,11 @@ core
 *.ico
 *.pdf
 *.mp4
-*.avi
 *.mp3
 *.ttf
-*.otf
-*.woff
-*.woff2
-*.eot
+*.woff*
 
-# --- LOGS AND INFORMATION NOISE ---
+# === LOGS AND NOISE ===
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -121,17 +115,15 @@ yarn-error.log*
 *.temp
 *.stackdump
 mrg-*.txt
-*.md
-*.bat
-*.sh
 
-# --- CONFIGURATIONS THAT MAY BE UNNECESSARY ---
-Cargo.lock
-*.xml
+# === LOCK FILES ===
 package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Cargo.lock
+poetry.lock
+composer.lock
 
-# ========== Add custom by user ==========
-
-
+# ========== Custom User Patterns =========
 
 "#;

@@ -1,7 +1,7 @@
 use crate::config::DEFAULT_IGNORE_CONTENT;
 use crate::tokenizer::AICounter;
 use crate::utils::{
-    MaximizeFilters, ProcessingMode, TreeNode, calculate_sha3_256, format_file_size,
+    MaximizeFilters, ProcessingMode, TreeNode, format_file_size,
     get_current_timestamp, maximize_content, minify_content, select_mrg_file,
     is_binary_file,
 };
@@ -17,13 +17,17 @@ use std::sync::mpsc;
 #[derive(Clone, Debug)]
 pub struct CombineOptions {
     pub is_update: bool,
-    pub split: Option<Option<String>>,
+    pub split: Option<String>,
     pub notsplit: bool,
     pub ignore_size: bool,
     pub pattern: bool,
     pub pattern_full: bool,
     pub pattern_min: bool,
     pub pattern_max: Option<Vec<String>>,
+}
+
+thread_local! {
+    static LOCAL_COUNTER: std::cell::Cell<usize> = std::cell::Cell::new(0);
 }
 
 struct FileResult {
@@ -146,10 +150,20 @@ fn format_count(val: usize) -> String {
 }
 
 pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
-    println!("[*] Scanning directory: {:?}", dir);
+    let root_name = dir
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_else(|| {
+            dir.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "project".into())
+        });
+
+    println!("[*] Scanning directory: {}", root_name);
 
     if !dir.exists() {
-        anyhow::bail!("Directory {:?} does not exist.", dir);
+        anyhow::bail!("Directory {} does not exist.", dir.display());
     }
 
     let ignore_path = Path::new(".mrgignore");
@@ -210,16 +224,6 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     } else {
         MaximizeFilters::default()
     };
-
-    let root_name = dir
-        .canonicalize()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        .unwrap_or_else(|| {
-            dir.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "project".into())
-        });
 
     if Path::new(".gitignore").exists() {
         if let Err(e) = update_gitignore(&root_name) {
@@ -320,6 +324,8 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
             .progress_chars("▰▰▱"),
     );
 
+    let batch_size = if final_files.len() > 200 { 20 } else { 1 };
+
     let processed_files: Vec<FileResult> = final_files
         .par_iter()
         .map(|(path, rel_path)| {
@@ -360,7 +366,15 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
             let words = file_block.split_whitespace().count();
             let chars = file_block.chars().count();
 
-            pb.inc(1);
+            LOCAL_COUNTER.with(|cell| {
+                let val = cell.get() + 1;
+                if val >= batch_size {
+                    pb.inc(batch_size as u64);
+                    cell.set(0);
+                } else {
+                    cell.set(val);
+                }
+            });
 
             FileResult {
                 rel_path: rel_path.clone(),
@@ -401,34 +415,22 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         }
     }
 
-    // 5. Memory-buffered Write and Incremental Hashing (No Seek)
-    let mut body = String::new();
-    body.push_str("Project Structure:\n");
-    body.push_str(&format!("{}/\n", root_name));
-    for line in &tree_lines {
-        body.push_str(line);
-        body.push('\n');
-    }
-    body.push('\n');
+    // 5. Stream-buffered Write and Incremental Hashing
+    let part_files: Vec<&FileResult> = processed_files.iter().collect();
+    let hash_hex = write_merged_file(
+        Path::new(&output_filename),
+        version,
+        &root_name,
+        &timestamp,
+        &tree_lines,
+        &part_files,
+        None,
+    )?;
 
-    for file_res in &processed_files {
-        body.push_str(&format!("=== start {} ===\n", file_res.rel_path));
-        body.push_str(&file_res.content);
-        if !file_res.content.ends_with('\n') {
-            body.push('\n');
-        }
-        body.push_str(&format!("=== end {} ===\n\n", file_res.rel_path));
-    }
-
-    let hash_hex = calculate_sha3_256(&body);
     let real_header = format!(
         "Project merger tool v{}\n{} ({})\nhash(sha3-256):{}\n**********\n",
         version, root_name, timestamp, hash_hex
     );
-
-    let mut final_content = real_header.clone();
-    final_content.push_str(&body);
-    fs::write(&output_filename, final_content)?;
 
     // 6. Token statistics summing
     let mut structure_text = String::new();
@@ -478,12 +480,10 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     let mut limit = 500_000;
     let mut always_split_if_exceeded = false;
 
-    if let Some(ref split_opt) = options.split {
+    if let Some(ref limit_str) = options.split {
         always_split_if_exceeded = true;
-        if let Some(limit_str) = split_opt {
-            if let Ok(parsed) = parse_limit(limit_str) {
-                limit = parsed;
-            }
+        if let Ok(parsed) = parse_limit(limit_str) {
+            limit = parsed;
         }
     }
 
@@ -569,6 +569,81 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     Ok(())
 }
 
+fn write_merged_file(
+    output_path: &Path,
+    version: &str,
+    root_name: &str,
+    timestamp: &str,
+    tree_lines: &[String],
+    part_files: &[&FileResult],
+    part_num: Option<usize>,
+) -> Result<String> {
+    use std::io::Write;
+    use sha3::Digest;
+
+    let temp_path = output_path.with_extension("tmp");
+    let res = (|| -> Result<String> {
+        let temp_file = fs::File::create(&temp_path)?;
+        let mut writer = std::io::BufWriter::new(temp_file);
+        
+        let mut hasher = sha3::Sha3_256::new();
+        
+        let mut write_body = |data: &str| -> std::io::Result<()> {
+            writer.write_all(data.as_bytes())?;
+            hasher.update(data.as_bytes());
+            Ok(())
+        };
+        
+        write_body("Project Structure:\n")?;
+        write_body(&format!("{}/\n", root_name))?;
+        for line in tree_lines {
+            write_body(line)?;
+            write_body("\n")?;
+        }
+        write_body("\n")?;
+        
+        for file_res in part_files {
+            write_body(&format!("=== start {} ===\n", file_res.rel_path))?;
+            write_body(&file_res.content)?;
+            if !file_res.content.ends_with('\n') {
+                write_body("\n")?;
+            }
+            write_body(&format!("=== end {} ===\n\n", file_res.rel_path))?;
+        }
+        
+        writer.flush()?;
+        drop(writer);
+        
+        let hash_hex = hex::encode(hasher.finalize());
+        
+        let real_header = if let Some(p_num) = part_num {
+            format!(
+                "Project merger tool v{}\n{} (part {}) ({})\nhash(sha3-256):{}\n**********\n",
+                version, root_name, p_num, timestamp, hash_hex
+            )
+        } else {
+            format!(
+                "Project merger tool v{}\n{} ({})\nhash(sha3-256):{}\n**********\n",
+                version, root_name, timestamp, hash_hex
+            )
+        };
+        
+        let mut final_file = fs::File::create(output_path)?;
+        final_file.write_all(real_header.as_bytes())?;
+        
+        let mut temp_file = fs::File::open(&temp_path)?;
+        std::io::copy(&mut temp_file, &mut final_file)?;
+        
+        fs::remove_file(&temp_path)?;
+        Ok(hash_hex)
+    })();
+
+    if res.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    res
+}
+
 fn write_part(
     split_dir_path: &Path,
     root_name: &str,
@@ -581,33 +656,16 @@ fn write_part(
     let part_filename = format!("mrg-{}-part{}.txt", root_name, part_num);
     let part_path = split_dir_path.join(&part_filename);
 
-    let mut body = String::new();
-    body.push_str("Project Structure:\n");
-    body.push_str(&format!("{}/\n", root_name));
-    for line in tree_lines {
-        body.push_str(line);
-        body.push('\n');
-    }
-    body.push('\n');
+    write_merged_file(
+        &part_path,
+        version,
+        root_name,
+        timestamp,
+        tree_lines,
+        part_files,
+        Some(part_num),
+    )?;
 
-    for file_res in part_files {
-        body.push_str(&format!("=== start {} ===\n", file_res.rel_path));
-        body.push_str(&file_res.content);
-        if !file_res.content.ends_with('\n') {
-            body.push('\n');
-        }
-        body.push_str(&format!("=== end {} ===\n\n", file_res.rel_path));
-    }
-
-    let hash_hex = calculate_sha3_256(&body);
-
-    let mut content = format!(
-        "Project merger tool v{}\n{} (part {}) ({})\nhash(sha3-256):{}\n**********\n",
-        version, root_name, part_num, timestamp, hash_hex
-    );
-    content.push_str(&body);
-
-    fs::write(&part_path, content)?;
     println!(
         "[+] Created split part: {} ({})",
         part_filename,
@@ -675,7 +733,7 @@ pub fn run_tokenize(file_path: Option<PathBuf>) -> Result<()> {
     println!("\nToken Statistics for all models:");
     
     let display_order = [
-        (crate::tokenizer::ModelKind::Gpt4oO1O3Mini, "GPT4-Turbo-O1-O3-Mini:"),
+        (crate::tokenizer::ModelKind::Gpt4oO1O3Mini, "GPT4-O1-O3-Mini:"),
         (crate::tokenizer::ModelKind::Gpt4TurboGpt35Turbo, "GPT4-Turbo-GPT3.5-Turbo:"),
         (crate::tokenizer::ModelKind::GeminiGemma7b, "Gemini-Gemma7B:"),
         (crate::tokenizer::ModelKind::Claude35SonnetOpus, "Claude3.5-Sonnet-Opus:"),

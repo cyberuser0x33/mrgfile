@@ -2,7 +2,6 @@ use anyhow::Result;
 use chrono::Utc;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use regex::Regex;
-use sha3::{Digest, Sha3_256};
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -72,11 +71,66 @@ pub fn get_skeleton_note(extension: &str) -> &'static str {
     }
 }
 
+pub fn get_tree_sitter_language(extension: &str) -> Option<tree_sitter::Language> {
+    match extension {
+        "rs" => Some(tree_sitter_rust::language()),
+        "py" => Some(tree_sitter_python::language()),
+        "js" | "jsx" | "ts" | "tsx" => Some(tree_sitter_javascript::language()),
+        "go" => Some(tree_sitter_go::language()),
+        _ => None,
+    }
+}
+
+fn get_comment_ranges(node: Node, ranges: &mut Vec<(usize, usize)>) {
+    let kind = node.kind();
+    if kind.contains("comment") {
+        ranges.push((node.start_byte(), node.end_byte()));
+    } else {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            get_comment_ranges(child, ranges);
+        }
+    }
+}
+
 pub fn minify_content(content: &str, extension: &str) -> String {
+    let lang = get_tree_sitter_language(extension);
+    let mut comment_free_content = None;
+
+    if let Some(l) = lang {
+        let stripped = THREAD_PARSER.with(|parser_cell| {
+            let mut parser = parser_cell.borrow_mut();
+            if parser.set_language(l).is_ok() {
+                if let Some(tree) = parser.parse(content, None) {
+                    let mut ranges = Vec::new();
+                    get_comment_ranges(tree.root_node(), &mut ranges);
+                    ranges.sort_by_key(|r| r.0);
+                    let mut result = String::new();
+                    let mut last_idx = 0;
+                    for (start, end) in ranges {
+                        if start > last_idx {
+                            result.push_str(&content[last_idx..start]);
+                        }
+                        last_idx = end;
+                    }
+                    if last_idx < content.len() {
+                        result.push_str(&content[last_idx..]);
+                    }
+                    return Some(result);
+                }
+            }
+            None
+        });
+        if let Some(s) = stripped {
+            comment_free_content = Some(s);
+        }
+    }
+
+    let target_content = comment_free_content.as_deref().unwrap_or(content);
     let mut minified = String::new();
     let mut in_multiline_comment = false;
 
-    for line in content.lines() {
+    for line in target_content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -84,73 +138,74 @@ pub fn minify_content(content: &str, extension: &str) -> String {
 
         let mut line_to_add = line.to_string();
 
-        match extension {
-            "rs" | "js" | "ts" | "go" | "java" | "cpp" | "c" | "h" | "cs" | "css" => {
-                if in_multiline_comment {
-                    if let Some(pos) = line_to_add.find("*/") {
-                        in_multiline_comment = false;
-                        line_to_add = line_to_add[pos + 2..].to_string();
-                    } else {
-                        continue;
+        if comment_free_content.is_none() {
+            match extension {
+                "rs" | "js" | "ts" | "go" | "java" | "cpp" | "c" | "h" | "cs" | "css" => {
+                    if in_multiline_comment {
+                        if let Some(pos) = line_to_add.find("*/") {
+                            in_multiline_comment = false;
+                            line_to_add = line_to_add[pos + 2..].to_string();
+                        } else {
+                            continue;
+                        }
+                    }
+
+                    while let Some(start_pos) = line_to_add.find("/*") {
+                        if let Some(end_pos) = line_to_add[start_pos..].find("*/") {
+                            let actual_end = start_pos + end_pos + 2;
+                            line_to_add = format!(
+                                "{}{}",
+                                &line_to_add[..start_pos],
+                                &line_to_add[actual_end..]
+                            );
+                        } else {
+                            line_to_add = line_to_add[..start_pos].to_string();
+                            in_multiline_comment = true;
+                            break;
+                        }
+                    }
+
+                    if let Some(pos) = line_to_add.find("//") {
+                        if pos == 0 || (pos > 0 && &line_to_add[pos - 1..pos] != ":") {
+                            line_to_add = line_to_add[..pos].to_string();
+                        }
                     }
                 }
-
-                while let Some(start_pos) = line_to_add.find("/*") {
-                    if let Some(end_pos) = line_to_add[start_pos..].find("*/") {
-                        let actual_end = start_pos + end_pos + 2;
-                        line_to_add = format!(
-                            "{}{}",
-                            &line_to_add[..start_pos],
-                            &line_to_add[actual_end..]
-                        );
-                    } else {
-                        line_to_add = line_to_add[..start_pos].to_string();
-                        in_multiline_comment = true;
-                        break;
-                    }
-                }
-
-                if let Some(pos) = line_to_add.find("//") {
-                    if pos == 0 || (pos > 0 && &line_to_add[pos - 1..pos] != ":") {
+                "py" | "sh" | "yaml" | "yml" | "toml" | "rb" | "r" => {
+                    if let Some(pos) = line_to_add.find('#') {
                         line_to_add = line_to_add[..pos].to_string();
                     }
                 }
-            }
-            "py" | "sh" | "yaml" | "yml" | "toml" | "rb" | "r" => {
-                if let Some(pos) = line_to_add.find('#') {
-                    line_to_add = line_to_add[..pos].to_string();
-                }
-            }
-            "html" | "xml" => {
-                if in_multiline_comment {
-                    if let Some(pos) = line_to_add.find("-->") {
-                        in_multiline_comment = false;
-                        line_to_add = line_to_add[pos + 3..].to_string();
-                    } else {
-                        continue;
+                "html" | "xml" => {
+                    if in_multiline_comment {
+                        if let Some(pos) = line_to_add.find("-->") {
+                            in_multiline_comment = false;
+                            line_to_add = line_to_add[pos + 3..].to_string();
+                        } else {
+                            continue;
+                        }
+                    }
+                    while let Some(start_pos) = line_to_add.find("<!--") {
+                        if let Some(end_pos) = line_to_add[start_pos..].find("-->") {
+                            let actual_end = start_pos + end_pos + 3;
+                            line_to_add = format!(
+                                "{}{}",
+                                &line_to_add[..start_pos],
+                                &line_to_add[actual_end..]
+                            );
+                        } else {
+                            line_to_add = line_to_add[..start_pos].to_string();
+                            in_multiline_comment = true;
+                            break;
+                        }
                     }
                 }
-                while let Some(start_pos) = line_to_add.find("<!--") {
-                    if let Some(end_pos) = line_to_add[start_pos..].find("-->") {
-                        let actual_end = start_pos + end_pos + 3;
-                        line_to_add = format!(
-                            "{}{}",
-                            &line_to_add[..start_pos],
-                            &line_to_add[actual_end..]
-                        );
-                    } else {
-                        line_to_add = line_to_add[..start_pos].to_string();
-                        in_multiline_comment = true;
-                        break;
-                    }
-                }
+                _ => {}
             }
-            _ => {}
         }
 
         let final_line = line_to_add.trim();
         if !final_line.is_empty() {
-            // Re-trim end of the line, keeping leading indentation
             let leading_indent_len = line_to_add.len() - line_to_add.trim_start().len();
             let indent = &line_to_add[..leading_indent_len];
             minified.push_str(indent);
@@ -170,13 +225,7 @@ pub fn maximize_content(content: &str, extension: &str) -> String {
     let mut skeleton = String::new();
     skeleton.push_str(get_skeleton_note(extension));
 
-    let lang = match extension {
-        "rs" => Some(tree_sitter_rust::language()),
-        "py" => Some(tree_sitter_python::language()),
-        "js" | "jsx" | "ts" | "tsx" => Some(tree_sitter_javascript::language()),
-        "go" => Some(tree_sitter_go::language()),
-        _ => None,
-    };
+    let lang = get_tree_sitter_language(extension);
 
     if let Some(l) = lang {
         let parsed_output = THREAD_PARSER.with(|parser_cell| {
@@ -522,12 +571,6 @@ pub fn format_file_size(size: u64) -> String {
 
 pub fn get_current_timestamp() -> String {
     Utc::now().format("%d-%b-%Y/%H:%M:%S").to_string()
-}
-
-pub fn calculate_sha3_256(data: &str) -> String {
-    let mut hasher = Sha3_256::new();
-    hasher.update(data.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 pub fn select_directory() -> Result<PathBuf> {

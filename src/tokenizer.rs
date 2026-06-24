@@ -1,9 +1,10 @@
+use anyhow::{Result, anyhow, bail};
 use reqwest::blocking::Client;
 use reqwest::header::USER_AGENT;
-use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use tokenizers::tokenizer::Tokenizer;
+use indicatif::{ProgressBar, ProgressStyle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelKind {
@@ -103,21 +104,40 @@ pub struct AICounter {
 }
 
 impl AICounter {
-    pub fn new(folder_name: &str, load_all: bool) -> Result<Self, Box<dyn Error>> {
-        let exe_path = std::env::current_exe()?;
-        let exe_dir = exe_path.parent().ok_or("Root dir not found")?;
-        let tokenizers_dir = exe_dir.join(folder_name);
+    pub fn new(folder_name: &str, load_all: bool) -> Result<Self> {
+        let base_dir = dirs::data_local_dir().ok_or_else(|| anyhow!("Local data directory not found"))?;
+        let tokenizers_dir = base_dir.join("mrgfile").join(folder_name);
 
         if !tokenizers_dir.exists() {
             fs::create_dir_all(&tokenizers_dir)?;
         }
 
-        // First, download any files that do not exist (always download all 10)
+        // Determine which models need to be downloaded
+        let mut to_download = Vec::new();
         for model in SUPPORTED_MODELS {
             let path = tokenizers_dir.join(model.filename);
             if !path.exists() {
-                Self::download_tokenizer(model.display_name, model.remote_url, &path)?;
+                to_download.push((model, path));
             }
+        }
+
+        // First, download any files that do not exist (always download all 10)
+        if !to_download.is_empty() {
+            let pb = ProgressBar::new(to_download.len() as u64);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template(
+                        "[{elapsed_precise}] [{bar:40.cyan/white}] Downloading tokenizers {pos}/{len}... {msg}",
+                    )
+                    .unwrap()
+                    .progress_chars("▰▰▱"),
+            );
+            for (model, path) in to_download {
+                pb.set_message(model.display_name);
+                Self::download_tokenizer(model.display_name, model.remote_url, &path, &pb)?;
+                pb.inc(1);
+            }
+            pb.finish_with_message("All tokenizers downloaded!");
         }
 
         let mut tokenizers = std::collections::HashMap::new();
@@ -135,7 +155,7 @@ impl AICounter {
             if should_load {
                 let t = Tokenizer::from_file(&path).map_err(|e| {
                     let _ = fs::remove_file(&path);
-                    format!(
+                    anyhow!(
                         "Dictionary error {}: {}. File was deleted, please try again.",
                         model.display_name, e
                     )
@@ -151,8 +171,9 @@ impl AICounter {
         name: &str,
         url: &str,
         path: &PathBuf,
-    ) -> Result<(), Box<dyn Error>> {
-        println!("[*] Downloading tokenizer for {}...", name);
+        pb: &ProgressBar,
+    ) -> Result<()> {
+        pb.println(format!("[*] Downloading tokenizer for {}...", name));
 
         let client = Client::builder().build()?;
         let response = client
@@ -164,14 +185,12 @@ impl AICounter {
 
         if !status.is_success() {
             let err_text = response.text().unwrap_or_else(|_| "Unknown error".into());
-            return Err(
-                format!("Server error {}: {}. Response: {}", name, status, err_text).into(),
-            );
+            bail!("Server error {}: {}. Response: {}", name, status, err_text);
         }
 
         let bytes = response.bytes()?;
         fs::write(path, bytes)?;
-        println!("[+] Successfully downloaded {}", name);
+        pb.println(format!("[+] Successfully downloaded {}", name));
         Ok(())
     }
 
@@ -243,7 +262,7 @@ impl AICounter {
         AnalysisResult {
             words,
             chars,
-            gpt_string: format!("GPT4-Turbo-O1-O3-Mini: ~{}", gpt_count),
+            gpt_string: format!("GPT4-O1-O3-Mini: ~{}", gpt_count),
             gemini_string: format!("Gemini-Gemma7B: ~{}", gemini_count),
             claude_string: format!("Claude3.5-Sonnet-Opus: ~{}", claude_count),
         }

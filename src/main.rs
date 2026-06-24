@@ -37,8 +37,8 @@ struct Cli {
     tokenize: Option<Option<PathBuf>>,
 
     /// Split option: if token limit is exceeded, split into parts. Value for limit (e.g. 350K, 1.2M, default 500K)
-    #[arg(long = "split", value_name = "LIMIT", global = true)]
-    split: Option<Option<String>>,
+    #[arg(long = "split", value_name = "LIMIT", default_missing_value = "500K", num_args = 0..=1, global = true)]
+    split: Option<String>,
 
     /// Do not split option: ignore limit, write all to one file (takes precedence over split check)
     #[arg(long = "notsplit", global = true)]
