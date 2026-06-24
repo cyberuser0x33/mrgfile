@@ -30,7 +30,7 @@ pub struct ModelInfo {
 pub const SUPPORTED_MODELS: &[ModelInfo] = &[
     ModelInfo {
         kind: ModelKind::Gpt4oO1O3Mini,
-        display_name: "GPT4-Turbo-O1-O3-Mini",
+        display_name: "GPT4-O1-O3-Mini",
         remote_url: "https://huggingface.co/datasets/cyberuser0x33/model-tokenizers/resolve/main/tokenizers/gpt4o_o1_o3mini.json",
         filename: "gpt4o_o1_o3mini.json",
     },

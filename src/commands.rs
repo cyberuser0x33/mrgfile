@@ -472,7 +472,7 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     println!("Words: {}, Characters: {}", format_count(total_words), format_count(total_chars));
     println!("SHA3-256-data: {}", hash_hex);
     println!("\nToken Statistics (there may be some margin of error): ");
-    println!("GPT4-Turbo-O1-O3-Mini: ~{}", format_count(total_gpt));
+    println!("GPT4-O1-O3-Mini: ~{}", format_count(total_gpt));
     println!("Gemini-Gemma7B: ~{}", format_count(total_gemini));
     println!("Claude3.5-Sonnet-Opus: ~{}", format_count(total_claude));
 
