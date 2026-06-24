@@ -1,6 +1,6 @@
 [package]
 name = "mrgfile"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 authors = ["cyberuser0x33 <cyberuser0x33@protonmail.com>"]
 description = "A fast CLI tool to merge project files into a single structured document optimized for LLM context (AI analysis)."
