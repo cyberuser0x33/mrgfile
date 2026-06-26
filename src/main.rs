@@ -3,7 +3,7 @@ mod config;
 mod tokenizer;
 mod utils;
 
-use crate::commands::{CombineOptions, run_combine, run_file, run_init, run_structure, run_tokenize};
+use crate::commands::{CombineOptions, run_combine, run_file, run_init, run_structure, run_tokenize, run_get};
 use crate::utils::select_directory;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -19,6 +19,10 @@ struct Cli {
     /// Combine project files (shortcut for combine subcommand)
     #[arg(short = 'c', long = "combine", value_name = "DIR")]
     combine: Option<Option<PathBuf>>,
+
+    /// Clone repository and combine its files (shortcut for get subcommand)
+    #[arg(short = 'g', long = "get", num_args(1..=2), value_names = ["URL", "DIR"])]
+    get: Option<Vec<String>>,
 
     /// Show project structure (shortcut for structure subcommand)
     #[arg(short = 's', long = "structure")]
@@ -79,6 +83,13 @@ enum Commands {
         #[arg(value_name = "DIR")]
         dir: Option<PathBuf>,
     },
+    /// Clone repository and combine its files
+    Get {
+        /// Repository URL
+        url: String,
+        /// Target directory for output file
+        dir: Option<PathBuf>,
+    },
     /// Show project structure
     Structure,
     /// Show merged file contents
@@ -103,6 +114,8 @@ fn main() -> Result<()> {
         pattern_full: cli.pattern_full,
         pattern_min: cli.pattern_min,
         pattern_max: cli.pattern_max.clone(),
+        custom_project_name: None,
+        custom_output_dir: None,
     };
 
     // Handle shortcuts
@@ -112,6 +125,16 @@ fn main() -> Result<()> {
             None => None,
         };
         return run_tokenize(file_path);
+    }
+
+    if let Some(get_args) = cli.get {
+        let url = get_args[0].clone();
+        let dir = if get_args.len() > 1 {
+            Some(PathBuf::from(&get_args[1]))
+        } else {
+            None
+        };
+        return run_get(&url, dir, options);
     }
 
     if let Some(dir_opt) = cli.combine {
@@ -145,6 +168,9 @@ fn main() -> Result<()> {
                 None => select_directory()?,
             };
             run_combine(dir, options)
+        }
+        Some(Commands::Get { url, dir }) => {
+            run_get(&url, dir, options)
         }
         Some(Commands::Update { dir }) => {
             let dir = match dir {

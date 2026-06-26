@@ -24,6 +24,8 @@ pub struct CombineOptions {
     pub pattern_full: bool,
     pub pattern_min: bool,
     pub pattern_max: Option<Vec<String>>,
+    pub custom_project_name: Option<String>,
+    pub custom_output_dir: Option<PathBuf>,
 }
 
 thread_local! {
@@ -150,15 +152,18 @@ fn format_count(val: usize) -> String {
 }
 
 pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
-    let root_name = dir
-        .canonicalize()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        .unwrap_or_else(|| {
-            dir.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "project".into())
-        });
+    let root_name = if let Some(ref name) = options.custom_project_name {
+        name.clone()
+    } else {
+        dir.canonicalize()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| {
+                dir.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "project".into())
+            })
+    };
 
     println!("[*] Scanning directory: {}", root_name);
 
@@ -396,13 +401,17 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
 
     let version = env!("CARGO_PKG_VERSION");
     let timestamp = get_current_timestamp();
-    let output_filename = format!("mrg-{}.txt", root_name);
+    let output_path = if let Some(ref out_dir) = options.custom_output_dir {
+        out_dir.join(format!("mrg-{}.txt", root_name))
+    } else {
+        PathBuf::from(format!("mrg-{}.txt", root_name))
+    };
 
-    if Path::new(&output_filename).exists() && !options.is_update {
+    if output_path.exists() && !options.is_update {
         let confirm = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(format!(
                 "File {} already exists. Overwrite?",
-                output_filename
+                output_path.display()
             ))
             .default(false)
             .interact()
@@ -418,7 +427,7 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     // 5. Stream-buffered Write and Incremental Hashing
     let part_files: Vec<&FileResult> = processed_files.iter().collect();
     let hash_hex = write_merged_file(
-        Path::new(&output_filename),
+        &output_path,
         version,
         &root_name,
         &timestamp,
@@ -460,10 +469,10 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
         total_chars += file_res.chars;
     }
 
-    let final_size = fs::metadata(&output_filename)?.len();
+    let final_size = fs::metadata(&output_path)?.len();
     println!(
         "[+] Created {} ({})",
-        output_filename,
+        clean_path_for_display(&output_path),
         format_file_size(final_size)
     );
     println!("[*] Files merged: {}", format_count(processed_files.len()));
@@ -511,10 +520,13 @@ pub fn run_combine(dir: PathBuf, options: CombineOptions) -> Result<()> {
     };
 
     if should_split {
-        let abs_project_dir = fs::canonicalize(&dir)?;
-        let parent_dir = abs_project_dir.parent().unwrap_or(Path::new("."));
-        let split_dir_name = format!("mrg-{}", root_name);
-        let split_dir_path = parent_dir.join(&split_dir_name);
+        let split_dir_path = if let Some(ref out_dir) = options.custom_output_dir {
+            out_dir.join(format!("mrg-{}", root_name))
+        } else {
+            let abs_project_dir = fs::canonicalize(&dir)?;
+            let parent_dir = abs_project_dir.parent().unwrap_or(Path::new("."));
+            parent_dir.join(format!("mrg-{}", root_name))
+        };
         fs::create_dir_all(&split_dir_path)?;
 
         println!("[*] Splitting project into parts in {}", clean_path_for_display(&split_dir_path));
@@ -751,4 +763,71 @@ pub fn run_tokenize(file_path: Option<PathBuf>) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn run_get(repo_url: &str, output_dir: Option<PathBuf>, options: CombineOptions) -> Result<()> {
+    let project_name = extract_project_name(repo_url);
+
+    let resolved_out_dir = match output_dir {
+        Some(ref d) if d == Path::new(".") => PathBuf::from("."),
+        Some(d) => d,
+        None => PathBuf::from("."),
+    };
+
+    if !resolved_out_dir.exists() {
+        fs::create_dir_all(&resolved_out_dir)?;
+    }
+
+    println!("[*] Creating temporary directory...");
+    let temp_dir = tempfile::tempdir()?;
+    let repo_path = temp_dir.path().to_path_buf();
+
+    let pb = ProgressBar::new(100);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] [{bar:40.blue/white}] Cloning repository... {pos}/{len} objects {msg}")
+            .unwrap()
+            .progress_chars("▰▰▱"),
+    );
+
+    let pb_clone = pb.clone();
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.transfer_progress(move |stats| {
+        let total = stats.total_objects() as u64;
+        let received = stats.received_objects() as u64;
+        if total > 0 {
+            pb_clone.set_length(total);
+            pb_clone.set_position(received);
+        }
+        true
+    });
+
+    let mut fetch_opts = git2::FetchOptions::new();
+    fetch_opts.remote_callbacks(callbacks);
+
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(fetch_opts);
+
+    println!("[*] Cloning repository {}...", repo_url);
+    builder.clone(repo_url, &repo_path)?;
+    pb.finish_with_message("Done!");
+
+    let mut modified_options = options;
+    modified_options.custom_project_name = Some(project_name);
+    modified_options.custom_output_dir = Some(resolved_out_dir);
+
+    run_combine(repo_path, modified_options)?;
+
+    Ok(())
+}
+
+fn extract_project_name(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/').trim_end_matches(".git");
+    if let Some(pos) = trimmed.rfind('/') {
+        trimmed[pos + 1..].to_string()
+    } else if let Some(pos) = trimmed.rfind(':') {
+        trimmed[pos + 1..].to_string()
+    } else {
+        trimmed.to_string()
+    }
 }

@@ -17,6 +17,7 @@
 - 🛡️ **Ignore Custom Patterns**: Uses a `.mrgignore` configuration (similar to `.gitignore`) to filter out binaries, build folders (`target/`, `node_modules/`), secrets, and temporary files.
 - 🔑 **Integrity Verification**: Generates a SHA3-256 hash for the merged project content.
 - 🔄 **Git Integration**: Automatically updates your local `.gitignore` with the generated merge files and configuration files.
+- 📥 **Remote Repository Support**: Clones a remote Git repository directly and merges its files without needing to download it manually.
 
 ---
 
@@ -83,6 +84,7 @@ The utility supports the following subcommands:
 
 - 🆕 **`init [NAME]`** — Creates a `.mrgignore` configuration file in the current directory. If `[NAME]` is specified, it will be included in the creation message.
 - 🔗 **`combine [DIR]`** — Scans and merges files in the specified directory `[DIR]`. If `[DIR]` is omitted, it triggers an interactive menu to select from available folders.
+- 📥 **`get <URL> [DIR]`** — Clones a remote Git repository to a temporary directory and merges its files. If `[DIR]` is specified, the output file is saved in that directory; otherwise, it is saved in the current directory.
 - 🔄 **`update [DIR]`** — Updates an existing merge file for the specified directory. Overwrites the file without asking for confirmation.
 - 🌳 **`structure`** — Extracts and prints the project directory tree from an existing `mrg-*.txt` file.
 - 📄 **`file`** — Prints the combined code content from an existing `mrg-*.txt` file (skipping headers and structural diagrams).
@@ -95,6 +97,7 @@ You can pass these flags alongside subcommands or use them directly as shortcuts
 
 ### 📌 Command Shortcuts
 - `-c, --combine [DIR]` — Shortcut for the `combine` subcommand.
+- `-g, --get <URL> [DIR]` — Shortcut for the `get` subcommand.
 - `-u, --update [DIR]` — Shortcut for the `update` subcommand.
 - `-s, --structure` — Shortcut for the `structure` subcommand.
 - `-f, --file` — Shortcut for the `file` subcommand.

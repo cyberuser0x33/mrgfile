@@ -1,6 +1,6 @@
 [package]
 name = "mrgfile"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2024"
 authors = ["cyberuser0x33 <cyberuser0x33@protonmail.com>"]
 description = "A fast CLI tool to merge project files into a single structured document optimized for LLM context (AI analysis)."
@@ -32,6 +32,8 @@ aws-lc-rs = "1.17.0"
 aws-lc-sys = "0.41.0"
 regex = "1.10"
 dirs = "5.0"
+git2 = "0.19"
+tempfile = "3.10"
 
 [profile.release]
 opt-level = 3
